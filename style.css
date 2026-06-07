@@ -1,0 +1,32 @@
+* {
+  box-sizing: border-box;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+@font-face {
+  font-family: "Phigros UI";
+  src: url("assets/Source Han Sans & Saira Hybrid-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+  overscroll-behavior: none;
+}
+#canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+}
