@@ -1,5 +1,7 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const uiAtlas = new Image();
+uiAtlas.src = "assets/Atlas.png";
 
 let screenWidth = 0;
 let screenHeight = 0;
@@ -37,6 +39,100 @@ function percentageToWorldY(y) {
   return (y - 0.5) * 10;
 }
 
+function drawJudgementLine(x, y, angle) {
+  let length = 1920 * 3 * screenHeight / 1000;
+  let thickness = 3 * 2.5 * screenHeight / 1000;
+  let worldX = percentageToWorldX(x);
+  let worldY = percentageToWorldY(y);
+  ctx.save();
+  ctx.translate(worldToScreenX(worldX), worldToScreenY(worldY));
+  ctx.rotate(-angle * Math.PI / 180);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(-length / 2, -thickness / 2, length, thickness);
+  ctx.restore();
+}
+
+function drawPause() {
+  if (!uiAtlas.complete || uiAtlas.naturalWidth == 0) return;
+  let x = uiToScreenX(-838.3 + 500 * 16 / 9 - uiHalfWidth());
+  let y = uiToScreenY(444.3);
+  let width = 34.262 * screenHeight / 1000;
+  let height = 37.966 * screenHeight / 1000;
+  ctx.drawImage(
+    uiAtlas,
+    37, 38, 37, 41,
+    x - width / 2,
+    y - height / 2,
+    width,
+    height
+  );
+}
+
+function drawScore(score) {
+  let x = uiToScreenX(651.5 + 400 / 2 + uiHalfWidth() - 500 * 16 / 9);
+  let y = uiToScreenY(445.7);
+  let fontSize = 50 * screenHeight / 1000;
+  ctx.save();
+  ctx.font = `${fontSize}px "Phigros UI"`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText(score, x, y);
+  ctx.restore();
+}
+
+function drawCombo(combo) {
+  let x = uiToScreenX(0);
+  let y = uiToScreenY(452);
+  let fontSize = 70 * screenHeight / 1000;
+  ctx.save();
+  ctx.font = `${fontSize}px "Phigros UI"`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(combo, x, y);
+  ctx.restore();
+}
+
+function drawComboText() {
+  let x = uiToScreenX(0);
+  let y = uiToScreenY(405);
+  let fontSize = 24 * screenHeight / 1000;
+  ctx.save();
+  ctx.font = `${fontSize}px "Phigros UI"`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("COMBO", x, y);
+  ctx.restore();
+}
+
+function drawSongsName(songsName) {
+  let x = uiToScreenX(40 - uiHalfWidth());
+  let y = uiToScreenY(-473.2 + 46 / 2);
+  let fontSize = 36 * screenHeight / 1000;
+  ctx.save();
+  ctx.font = `${fontSize}px "Phigros UI"`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(songsName, x, y);
+  ctx.restore();
+}
+
+function drawSongsLevel(songsLevel) {
+  let x = uiToScreenX(uiHalfWidth() - 40);
+  let y = uiToScreenY(-473.2 + 46 / 2);
+  let fontSize = 36 * screenHeight / 1000;
+  ctx.save();
+  ctx.font = `${fontSize}px "Phigros UI"`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText(songsLevel, x, y);
+  ctx.restore();
+}
+
 function resizeCanvas() {
   let rect = canvas.getBoundingClientRect();
   deviceScale = Math.max(1, window.devicePixelRatio || 1);
@@ -54,6 +150,19 @@ function drawFrame() {
   ctx.clearRect(0, 0, screenWidth, screenHeight);
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, screenWidth, screenHeight);
+
+  drawJudgementLine(0.5, 0.5, 0);
+  if (sideMaskWidth > 0) {
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, sideMaskWidth, screenHeight);
+    ctx.fillRect(screenWidth - sideMaskWidth, 0, sideMaskWidth, screenHeight);
+  }
+  drawPause();
+  drawScore("0000000");
+  drawCombo("99");
+  drawComboText();
+  drawSongsName("BANGING STRIKE");
+  drawSongsLevel("HD  Lv.10");
 }
 
 function gameLoop() {
