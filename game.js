@@ -2,6 +2,10 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const uiAtlas = new Image();
 uiAtlas.src = "assets/Atlas.png";
+const noteRing = new Image();
+noteRing.src = "assets/NoteRing.png";
+const pauseAudio = new Audio("assets/Tap6.wav");
+pauseAudio.preload = "auto";
 
 let screenWidth = 0;
 let screenHeight = 0;
@@ -9,6 +13,9 @@ let deviceScale = 1;
 let visibleWidth = 0;
 let sideMaskWidth = 0;
 let effectiveAspect = 0;
+let pauseTime = 0;
+let paused = false;
+let lastFrameTime = performance.now();
 
 function uiHalfWidth() {
   return 500 * effectiveAspect;
@@ -49,6 +56,19 @@ function drawJudgementLine(x, y, angle) {
   ctx.rotate(-angle * Math.PI / 180);
   ctx.fillStyle = "#fff";
   ctx.fillRect(-length / 2, -thickness / 2, length, thickness);
+  ctx.restore();
+}
+
+function drawPauseRing() {
+  if (pauseTime <= 0 || !noteRing.complete || noteRing.naturalWidth == 0) return;
+  let x = uiToScreenX(-838.3 + 500 * 16 / 9 - uiHalfWidth() - 1.7);
+  let y = uiToScreenY(444.3 + 0.69);
+  let size = 63.488 * screenHeight / 1000;
+  let t = Math.min(0.25, 1.2 - pauseTime);
+  let alpha = -25.6 * t * t * t + 9.6 * t * t;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(noteRing, x - size / 2, y - size / 2, size, size);
   ctx.restore();
 }
 
@@ -158,6 +178,7 @@ function drawFrame() {
     ctx.fillRect(screenWidth - sideMaskWidth, 0, sideMaskWidth, screenHeight);
   }
   drawPause();
+  drawPauseRing();
   drawScore("0000000");
   drawCombo("99");
   drawComboText();
@@ -165,12 +186,47 @@ function drawFrame() {
   drawSongsLevel("HD  Lv.10");
 }
 
-function gameLoop() {
+function isInsidePauseHitbox(screenX, screenY) {
+  let x = screenToWorldX(screenX);
+  let y = screenToWorldY(screenY);
+  if (y > 4.85) return false;
+  if (y < 4.05) return false;
+  let leftEdge = -5 * effectiveAspect;
+  if (x < leftEdge + 0.05 * 16 / 9) return false;
+  if (x > leftEdge + 0.5 * 16 / 9) return false;
+  return true;
+}
+
+function handlePausePointer(event) {
+  if (paused || !isInsidePauseHitbox(event.clientX, event.clientY)) return;
+  event.preventDefault();
+  if (pauseTime > 0) {
+    pauseTime = 0;
+    pauseAudio.currentTime = 0;
+    pauseAudio.play().catch(() => {});
+    paused = true;
+    return;
+  }
+  pauseTime = 1.2;
+}
+
+function updatePauseTimer(deltaTime) {
+  if (pauseTime <= 0) return;
+  pauseTime = Math.max(0, pauseTime - deltaTime);
+}
+
+function gameLoop(now) {
+  let deltaTime = (now - lastFrameTime) / 1000;
+  lastFrameTime = now;
+  if (!paused) {
+    updatePauseTimer(deltaTime);
+  }
   drawFrame();
   requestAnimationFrame(gameLoop);
 }
 
 window.addEventListener("resize", resizeCanvas);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resizeCanvas);
+canvas.addEventListener("pointerdown", handlePausePointer);
 resizeCanvas();
 requestAnimationFrame(gameLoop);
