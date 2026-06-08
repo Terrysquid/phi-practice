@@ -1,11 +1,17 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
-const uiAtlas = new Image();
-uiAtlas.src = "assets/Atlas.png";
+const pauseIcon = new Image();
+pauseIcon.src = "assets/Pause.png";
 const noteRing = new Image();
 noteRing.src = "assets/NoteRing.png";
 const pauseAudio = new Audio("assets/Tap6.wav");
 pauseAudio.preload = "auto";
+const backIcon = new Image();
+backIcon.src = "assets/Back.png";
+const retryIcon = new Image();
+retryIcon.src = "assets/Retry.png";
+const resumeIcon = new Image();
+resumeIcon.src = "assets/Resume.png";
 
 let screenWidth = 0;
 let screenHeight = 0;
@@ -73,19 +79,33 @@ function drawPauseRing() {
 }
 
 function drawPause() {
-  if (!uiAtlas.complete || uiAtlas.naturalWidth == 0) return;
+  if (!pauseIcon.complete || pauseIcon.naturalWidth == 0) return;
   let x = uiToScreenX(-838.3 + 500 * 16 / 9 - uiHalfWidth());
   let y = uiToScreenY(444.3);
   let width = 34.262 * screenHeight / 1000;
   let height = 37.966 * screenHeight / 1000;
-  ctx.drawImage(
-    uiAtlas,
-    37, 38, 37, 41,
-    x - width / 2,
-    y - height / 2,
-    width,
-    height
-  );
+  ctx.drawImage(pauseIcon, x - width / 2, y - height / 2, width, height);
+}
+
+function drawPauseBarButton(icon, x, y) {
+  if (!icon.complete || icon.naturalWidth == 0) return;
+  let centerX = uiToScreenX(x);
+  let centerY = uiToScreenY(y);
+  let boxSize = 82.08 * screenHeight / 1000;
+  let scale = Math.min(boxSize / icon.naturalWidth, boxSize / icon.naturalHeight);
+  let width = icon.naturalWidth * scale;
+  let height = icon.naturalHeight * scale;
+  ctx.drawImage(icon, centerX - width / 2, centerY - height / 2, width, height);
+}
+
+function drawPauseBar() {
+  ctx.save();
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, screenWidth, screenHeight);
+  drawPauseBarButton(backIcon, -216, 0);
+  drawPauseBarButton(retryIcon, 0, 0);
+  drawPauseBarButton(resumeIcon, 216, 0);
+  ctx.restore();
 }
 
 function drawScore(score) {
@@ -184,6 +204,7 @@ function drawFrame() {
   drawComboText();
   drawSongsName("BANGING STRIKE");
   drawSongsLevel("HD  Lv.10");
+  if (paused) drawPauseBar();
 }
 
 function isInsidePauseHitbox(screenX, screenY) {
