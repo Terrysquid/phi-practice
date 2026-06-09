@@ -20,7 +20,7 @@ let visibleWidth = 0;
 let sideMaskWidth = 0;
 let effectiveAspect = 0;
 let pauseTime = 0;
-let paused = false;
+let paused = true;
 let lastFrameTime = performance.now();
 
 function uiHalfWidth() {
@@ -98,6 +98,24 @@ function drawPauseBarButton(icon, x, y) {
   ctx.drawImage(icon, centerX - width / 2, centerY - height / 2, width, height);
 }
 
+function drawLoadButton() {
+  let x = uiToScreenX(0);
+  let y = uiToScreenY(-180);
+  let width = 180 * screenHeight / 1000;
+  let height = 60 * screenHeight / 1000;
+  let fontSize = 30 * screenHeight / 1000;
+  ctx.save();
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2 * screenHeight / 1000;
+  ctx.strokeRect(x - width / 2, y - height / 2, width, height);
+  ctx.font = `${fontSize}px "Phigros UI"`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Load Zip", x, y);
+  ctx.restore();
+}
+
 function drawPauseBar() {
   ctx.save();
   ctx.fillStyle = "#000";
@@ -105,6 +123,7 @@ function drawPauseBar() {
   drawPauseBarButton(backIcon, -216, 0);
   drawPauseBarButton(retryIcon, 0, 0);
   drawPauseBarButton(resumeIcon, 216, 0);
+  drawLoadButton();
   ctx.restore();
 }
 
