@@ -12,6 +12,11 @@ const retryIcon = new Image();
 retryIcon.src = "assets/Retry.png";
 const resumeIcon = new Image();
 resumeIcon.src = "assets/Resume.png";
+const zipInput = document.createElement("input");
+zipInput.type = "file";
+zipInput.accept = ".zip";
+zipInput.style.display = "none";
+document.body.appendChild(zipInput);
 
 let screenWidth = 0;
 let screenHeight = 0;
@@ -21,6 +26,7 @@ let sideMaskWidth = 0;
 let effectiveAspect = 0;
 let pauseTime = 0;
 let paused = true;
+let loadedZip = null;
 let lastFrameTime = performance.now();
 
 function uiHalfWidth() {
@@ -237,6 +243,17 @@ function isInsidePauseHitbox(screenX, screenY) {
   return true;
 }
 
+function isInsideLoadHitbox(screenX, screenY) {
+  let x = uiToScreenX(0);
+  let y = uiToScreenY(-180);
+  let width = 180 * screenHeight / 1000;
+  let height = 60 * screenHeight / 1000;
+  return (
+    Math.abs(screenX - x) <= width / 2 &&
+    Math.abs(screenY - y) <= height / 2
+  );
+}
+
 function handlePausePointer(event) {
   if (paused || !isInsidePauseHitbox(event.clientX, event.clientY)) return;
   event.preventDefault();
@@ -248,6 +265,22 @@ function handlePausePointer(event) {
     return;
   }
   pauseTime = 1.2;
+}
+
+function handlePauseMenuPointer(event) {
+  event.preventDefault();
+  if (isInsideLoadHitbox(event.clientX, event.clientY)) {
+    zipInput.value = "";
+    zipInput.click();
+  }
+}
+
+function handlePointer(event) {
+  if (paused) {
+    handlePauseMenuPointer(event);
+    return;
+  }
+  handlePausePointer(event);
 }
 
 function updatePauseTimer(deltaTime) {
@@ -267,6 +300,12 @@ function gameLoop(now) {
 
 window.addEventListener("resize", resizeCanvas);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resizeCanvas);
-canvas.addEventListener("pointerdown", handlePausePointer);
+canvas.addEventListener("pointerdown", handlePointer);
+zipInput.addEventListener("change", async () => {
+  let file = zipInput.files[0];
+  if (!file) return;
+  loadedZip = await JSZip.loadAsync(file);
+  console.log(Object.keys(loadedZip.files));
+});
 resizeCanvas();
 requestAnimationFrame(gameLoop);
