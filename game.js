@@ -18,6 +18,7 @@ zipInput.accept = ".zip";
 zipInput.style.display = "none";
 document.body.appendChild(zipInput);
 
+let info = {};
 let screenWidth = 0;
 let screenHeight = 0;
 let deviceScale = 1;
@@ -28,6 +29,21 @@ let pauseTime = 0;
 let paused = true;
 let loadedZip = null;
 let lastFrameTime = performance.now();
+
+function readYaml(text) {
+  let out = {};
+  for (let line of text.split(/\r?\n/)) {
+    let i = line.indexOf(":");
+    if (i < 0) continue;
+    let key = line.slice(0, i).trim();
+    let value = line.slice(i + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+}
 
 function uiHalfWidth() {
   return 500 * effectiveAspect;
@@ -119,6 +135,10 @@ function drawLoadButton() {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("Load Zip", x, y);
+  let file = zipInput.files[0];
+  if (file) {
+    ctx.fillText(file.name, uiToScreenX(0), uiToScreenY(-240));
+  }
   ctx.restore();
 }
 
@@ -303,9 +323,26 @@ if (window.visualViewport) window.visualViewport.addEventListener("resize", resi
 canvas.addEventListener("pointerdown", handlePointer);
 zipInput.addEventListener("change", async () => {
   let file = zipInput.files[0];
-  if (!file) return;
-  loadedZip = await JSZip.loadAsync(file);
-  console.log(Object.keys(loadedZip.files));
+  if (file) {
+    loadedZip = await JSZip.loadAsync(file);
+    let infoFile = loadedZip.file("info.yml");
+    if (infoFile) {
+      let infoText = await infoFile.async("string")
+      info = readYaml(infoText);
+      console.log(info);
+    }
+    info.chart = info.chart || "chart.json";
+    info.charter = info.charter || "UK";
+    info.composer = info.composer || "UK";
+    info.difficulty = Number(info.difficulty || 10.0);
+    info.illustration = info.illustration || "background.png";
+    info.illustrator = info.illustrator || "UK";
+    info.level = info.level || "UK  Lv.10";
+    info.music = info.music || "song.mp3";
+    info.name = info.name || "UK";
+    info.previewStart = Number(info.previewStart || 0.0);
+    info.previewEnd = Number(info.previewEnd || info.previewStart + 15.0);
+  }
 });
 resizeCanvas();
 requestAnimationFrame(gameLoop);
