@@ -18,7 +18,16 @@ zipInput.accept = ".zip";
 zipInput.style.display = "none";
 document.body.appendChild(zipInput);
 
-let info = {};
+let level = {
+  zip: null,
+  info: {},
+  chart: null,
+  music: null,
+  illustration: null,
+  illustrationBlur: null, // not used yet
+  illustrationLowRes: null // not used yet
+}
+
 let screenWidth = 0;
 let screenHeight = 0;
 let deviceScale = 1;
@@ -27,7 +36,6 @@ let sideMaskWidth = 0;
 let effectiveAspect = 0;
 let pauseTime = 0;
 let paused = true;
-let loadedZip = null;
 let lastFrameTime = performance.now();
 
 function readYaml(text) {
@@ -43,6 +51,26 @@ function readYaml(text) {
     out[key] = value;
   }
   return out;
+}
+
+async function loadZipContent(path, type) {
+  let file = level.zip.file(path);
+  if (!file) return null;
+  if (type == "json") {
+    let text = await file.async("string");
+    return JSON.parse(text);
+  }
+  if (type == "audio") {
+    let blob = await file.async("blob");
+    return new Audio(URL.createObjectURL(blob));
+  }
+  if (type == "image") {
+    let blob = await file.async("blob");
+    let image = new Image();
+    image.src = URL.createObjectURL(blob);
+    return image;
+  }
+  return null;
 }
 
 function uiHalfWidth() {
@@ -324,24 +352,37 @@ canvas.addEventListener("pointerdown", handlePointer);
 zipInput.addEventListener("change", async () => {
   let file = zipInput.files[0];
   if (file) {
-    loadedZip = await JSZip.loadAsync(file);
-    let infoFile = loadedZip.file("info.yml");
+    level.info = {};
+    level.chart = null;
+    level.music = null;
+    level.illustration = null;
+    level.illustrationBlur = null;
+    level.illustrationLowRes = null;
+    level.zip = await JSZip.loadAsync(file);
+    let infoFile = level.zip.file("info.yml");
     if (infoFile) {
       let infoText = await infoFile.async("string")
-      info = readYaml(infoText);
-      console.log(info);
+      level.info = readYaml(infoText);
+      console.log(level.info);
     }
-    info.chart = info.chart || "chart.json";
-    info.charter = info.charter || "UK";
-    info.composer = info.composer || "UK";
-    info.difficulty = Number(info.difficulty || 10.0);
-    info.illustration = info.illustration || "background.png";
-    info.illustrator = info.illustrator || "UK";
-    info.level = info.level || "UK  Lv.10";
-    info.music = info.music || "song.mp3";
-    info.name = info.name || "UK";
-    info.previewStart = Number(info.previewStart || 0.0);
-    info.previewEnd = Number(info.previewEnd || info.previewStart + 15.0);
+    level.info.chart = level.info.chart || "chart.json";
+    level.info.charter = level.info.charter || "UK";
+    level.info.composer = level.info.composer || "UK";
+    level.info.difficulty = Number(level.info.difficulty || 10.0);
+    level.info.illustration = level.info.illustration || "illustration.jpg";
+    level.info.illustrationBlur = level.info.illustrationBlur || "illustrationBlur.jpg";
+    level.info.illustrationLowRes = level.info.illustrationLowRes || "illustrationLowRes.jpg";
+    level.info.illustrator = level.info.illustrator || "UK";
+    level.info.level = level.info.level || "UK  Lv.10";
+    level.info.music = level.info.music || "music.wav";
+    level.info.name = level.info.name || "UK";
+    level.info.previewStart = Number(level.info.previewStart || 0.0);
+    level.info.previewEnd = Number(level.info.previewEnd || level.info.previewStart + 15.0);
+    level.chart = await loadZipContent(level.info.chart, "json");
+    level.music = await loadZipContent(level.info.music, "audio");
+    level.illustration = await loadZipContent(level.info.illustration, "image");
+    level.illustrationBlur = await loadZipContent(level.info.illustrationBlur, "image");
+    level.illustrationLowRes = await loadZipContent(level.info.illustrationLowRes, "image");
   }
 });
 resizeCanvas();
