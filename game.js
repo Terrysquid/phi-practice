@@ -23,10 +23,10 @@ let level = {
   info: {},
   chart: null,
   music: null,
-  illustration: null,
-  illustrationBlur: null, // not used yet
+  illustration: null, // not used yet
+  illustrationBlur: null,
   illustrationLowRes: null // not used yet
-}
+};
 
 let screenWidth = 0;
 let screenHeight = 0;
@@ -113,6 +113,19 @@ function drawJudgementLine(x, y, angle) {
   ctx.fillStyle = "#fff";
   ctx.fillRect(-length / 2, -thickness / 2, length, thickness);
   ctx.restore();
+}
+
+function drawBackground() {
+  // temporary
+  let image = level.illustrationBlur;
+  if (!image || !image.complete || image.naturalWidth == 0) return;
+  let height = screenHeight;
+  let width = image.naturalWidth / image.naturalHeight * height;
+  let x = (screenWidth - width) / 2;
+  let y = 0;
+  ctx.drawImage(image, x, y, width, height);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+  ctx.fillRect(0, 0, screenWidth, screenHeight);
 }
 
 function drawPauseRing() {
@@ -263,6 +276,7 @@ function drawFrame() {
   ctx.clearRect(0, 0, screenWidth, screenHeight);
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, screenWidth, screenHeight);
+  drawBackground();
 
   drawJudgementLine(0.5, 0.5, 0);
   if (sideMaskWidth > 0) {
@@ -275,8 +289,8 @@ function drawFrame() {
   drawScore("0000000");
   drawCombo("99");
   drawComboText();
-  drawSongsName("BANGING STRIKE");
-  drawSongsLevel("HD  Lv.10");
+  drawSongsName(level.info.name);
+  drawSongsLevel(level.info.level);
   if (paused) drawPauseBar();
 }
 
@@ -289,6 +303,13 @@ function isInsidePauseHitbox(screenX, screenY) {
   if (x < leftEdge + 0.05 * 16 / 9) return false;
   if (x > leftEdge + 0.5 * 16 / 9) return false;
   return true;
+}
+
+function isInsidePauseMenuHitbox(screenX, screenY, worldX) {
+  let x = worldToScreenX(worldX);
+  let y = worldToScreenY(0);
+  let r = 0.65 * screenHeight / 10;
+  return Math.hypot(screenX - x, screenY - y) <= r;
 }
 
 function isInsideLoadHitbox(screenX, screenY) {
@@ -320,6 +341,13 @@ function handlePauseMenuPointer(event) {
   if (isInsideLoadHitbox(event.clientX, event.clientY)) {
     zipInput.value = "";
     zipInput.click();
+    return;
+  }
+  if (isInsidePauseMenuHitbox(event.clientX, event.clientY, 2) && level.zip) {
+    // temporary
+    pauseTime = 0;
+    paused = false;
+    return;
   }
 }
 
@@ -361,7 +389,7 @@ zipInput.addEventListener("change", async () => {
     level.zip = await JSZip.loadAsync(file);
     let infoFile = level.zip.file("info.yml");
     if (infoFile) {
-      let infoText = await infoFile.async("string")
+      let infoText = await infoFile.async("string");
       level.info = readYaml(infoText);
       console.log(level.info);
     }
