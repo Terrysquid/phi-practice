@@ -22,10 +22,18 @@ let level = {
   zip: null,
   info: {},
   chart: null,
+  nowTime: -3,
+  startTime: -1,
+  audioStarted: false,
+  audioRequested: false,
   music: null,
   illustration: null, // not used yet
   illustrationBlur: null,
   illustrationLowRes: null // not used yet
+};
+
+let settings = {
+  offset: 0.0
 };
 
 let screenWidth = 0;
@@ -62,7 +70,10 @@ async function loadZipContent(path, type) {
   }
   if (type == "audio") {
     let blob = await file.async("blob");
-    return new Audio(URL.createObjectURL(blob));
+    let audio = new Audio(URL.createObjectURL(blob));
+    audio.preload = "auto";
+    audio.load();
+    return audio;
   }
   if (type == "image") {
     let blob = await file.async("blob");
@@ -102,7 +113,7 @@ function percentageToWorldY(y) {
   return (y - 0.5) * 10;
 }
 
-function drawJudgementLine(x, y, angle) {
+function drawJudgeLine(x, y, angle) {
   let length = 1920 * 3 * screenHeight / 1000;
   let thickness = 3 * 2.5 * screenHeight / 1000;
   let worldX = percentageToWorldX(x);
@@ -113,6 +124,14 @@ function drawJudgementLine(x, y, angle) {
   ctx.fillStyle = "#fff";
   ctx.fillRect(-length / 2, -thickness / 2, length, thickness);
   ctx.restore();
+}
+
+function drawJudgeLines() {
+  if (!level.chart) return;
+
+  for (let line of level.chart.judgeLineList) {
+    drawJudgeLine(0.5, Math.random(), 0);
+  }
 }
 
 function drawBackground() {
@@ -278,7 +297,7 @@ function drawFrame() {
   ctx.fillRect(0, 0, screenWidth, screenHeight);
   drawBackground();
 
-  drawJudgementLine(0.5, 0.5, 0);
+  drawJudgeLines();
   if (sideMaskWidth > 0) {
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, sideMaskWidth, screenHeight);
@@ -364,11 +383,33 @@ function updatePauseTimer(deltaTime) {
   pauseTime = Math.max(0, pauseTime - deltaTime);
 }
 
+function updateLevelTime() {
+  let time = performance.now() / 1000;
+  if (level.startTime < 0) level.startTime = time + 1.5;
+  if (!level.audioStarted && !level.audioRequested && time >= level.startTime) {
+    level.music.currentTime = 0;
+    level.audioRequested = true;
+    level.music.play()
+      .then(() => {
+        level.audioStarted = true;
+      })
+      .catch((error) => {
+        level.audioRequested = false;
+        console.log("music play failed:", error);
+      });
+  }
+  if (level.audioStarted) {
+    level.nowTime = level.music.currentTime - (level.chart.offset + settings.offset);
+    if (level.nowTime < 0) level.nowTime = 0;
+  }
+}
+
 function gameLoop(now) {
   let deltaTime = (now - lastFrameTime) / 1000;
   lastFrameTime = now;
   if (!paused) {
     updatePauseTimer(deltaTime);
+    updateLevelTime();
   }
   drawFrame();
   requestAnimationFrame(gameLoop);
@@ -382,6 +423,11 @@ zipInput.addEventListener("change", async () => {
   if (file) {
     level.info = {};
     level.chart = null;
+    level.nowTime = -3;
+    level.startTime = -1;
+    level.audioStarted = false;
+    level.audioRequested = false;
+    if (level.music) level.music.pause();
     level.music = null;
     level.illustration = null;
     level.illustrationBlur = null;
