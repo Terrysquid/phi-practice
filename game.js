@@ -24,6 +24,8 @@ let level = {
   chart: null,
   nowTime: -3,
   startTime: -1,
+  startDelay: 1.5,
+  audioTime: 0,
   audioStarted: false,
   audioRequested: false,
   music: null,
@@ -342,13 +344,30 @@ function isInsideLoadHitbox(screenX, screenY) {
   );
 }
 
+function pauseLevel() {
+  pauseAudio.currentTime = 0;
+  pauseAudio.play().catch(() => {});
+  if (level.music) {
+    level.audioTime = level.music.currentTime;
+    level.music.pause();
+  }
+  level.audioStarted = false;
+  level.audioRequested = false;
+}
+
+function resumeLevel() {
+  level.startTime = -1;
+  level.startDelay = 3.0;
+  level.audioStarted = false;
+  level.audioRequested = false;
+}
+
 function handlePausePointer(event) {
   if (paused || !isInsidePauseHitbox(event.clientX, event.clientY)) return;
   event.preventDefault();
   if (pauseTime > 0) {
     pauseTime = 0;
-    pauseAudio.currentTime = 0;
-    pauseAudio.play().catch(() => {});
+    pauseLevel();
     paused = true;
     return;
   }
@@ -363,8 +382,8 @@ function handlePauseMenuPointer(event) {
     return;
   }
   if (isInsidePauseMenuHitbox(event.clientX, event.clientY, 2) && level.zip) {
-    // temporary
     pauseTime = 0;
+    resumeLevel();
     paused = false;
     return;
   }
@@ -384,10 +403,11 @@ function updatePauseTimer(deltaTime) {
 }
 
 function updateLevelTime() {
+  if (!level.chart || !level.music) return;
   let time = performance.now() / 1000;
-  if (level.startTime < 0) level.startTime = time + 1.5;
+  if (level.startTime < 0) level.startTime = time + level.startDelay;
   if (!level.audioStarted && !level.audioRequested && time >= level.startTime) {
-    level.music.currentTime = 0;
+    level.music.currentTime = level.audioTime;
     level.audioRequested = true;
     level.music.play()
       .then(() => {
@@ -399,7 +419,8 @@ function updateLevelTime() {
       });
   }
   if (level.audioStarted) {
-    level.nowTime = level.music.currentTime - (level.chart.offset + settings.offset);
+    level.audioTime = level.music.currentTime;
+    level.nowTime = level.audioTime - (level.chart.offset + settings.offset);
     if (level.nowTime < 0) level.nowTime = 0;
   }
 }
@@ -425,6 +446,8 @@ zipInput.addEventListener("change", async () => {
     level.chart = null;
     level.nowTime = -3;
     level.startTime = -1;
+    level.startDelay = 1.5;
+    level.audioTime = 0;
     level.audioStarted = false;
     level.audioRequested = false;
     if (level.music) level.music.pause();
