@@ -86,6 +86,12 @@ async function loadZipContent(path, type) {
   return null;
 }
 
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+function inverseLerp(a, b, v) {
+  return (v - a) / (b - a);
+}
 function uiHalfWidth() {
   return 500 * effectiveAspect;
   return Math.min(500 * 16 / 9, 500 * screenWidth / screenHeight);
@@ -108,20 +114,82 @@ function screenToWorldX(x) {
 function screenToWorldY(y) {
   return (screenHeight / 2 - y) * 10 / screenHeight;
 }
-function percentageToWorldX(x) {
-  return (x - 0.5) * 10 * effectiveAspect;
-}
-function percentageToWorldY(y) {
-  return (y - 0.5) * 10;
+
+function prepareChart(chart) {
+  for (let lineIndex = 0; lineIndex < chart.judgeLineList.length; lineIndex++) {
+    let line = chart.judgeLineList[lineIndex];
+    let bpm = line.bpm;
+    for (let noteIndex = 0; noteIndex < line.notesAbove.length; noteIndex++) {
+      let note = line.notesAbove[noteIndex];
+      if (effectiveAspect < 16 / 9) note.positionX = effectiveAspect / (16 / 9) * note.positionX;
+      note.realTime = note.time * 1.875 / bpm;
+      note.holdTime = Math.trunc(note.holdTime + 0.0001) * 1.875 / bpm;
+      note.judgeLineIndex = lineIndex * 2;
+      note.noteIndex = noteIndex;
+      note.isJudged = false;
+    }
+    for (let noteIndex = 0; noteIndex < line.notesBelow.length; noteIndex++) {
+      let note = line.notesBelow[noteIndex];
+      if (effectiveAspect < 16 / 9) note.positionX = effectiveAspect / (16 / 9) * note.positionX;
+      note.realTime = note.time * 1.875 / bpm;
+      note.holdTime = Math.trunc(note.holdTime + 0.0001) * 1.875 / bpm;
+      note.judgeLineIndex = lineIndex * 2 + 1;
+      note.noteIndex = noteIndex;
+      note.isJudged = false;
+    }
+    for (let i = 0; i < line.speedEvents.length; i++) {
+      let event = line.speedEvents[i];
+      if (i == 0) {
+        event.floorPosition = event.startTime * 1.875 / bpm;
+      } else {
+        // integral of v dt
+        let previous = line.speedEvents[i - 1];
+        event.floorPosition = previous.floorPosition + (previous.endTime - previous.startTime) * 1.875 / bpm * previous.value;
+        previous.startTime = Math.trunc(previous.startTime) * 1.875 / bpm;
+        previous.endTime = Math.trunc(previous.endTime) * 1.875 / bpm;
+      }
+      if (i == line.speedEvents.length - 1) {
+        event.startTime = Math.trunc(event.startTime) * 1.875 / bpm;
+        event.endTime = Math.trunc(event.endTime) * 1.875 / bpm;
+      }
+    }
+    for (let event of line.judgeLineDisappearEvents) {
+      event.startTime = Math.trunc(event.startTime) * 1.875 / bpm;
+      event.endTime = Math.trunc(event.endTime) * 1.875 / bpm;
+    }
+    for (let event of line.judgeLineMoveEvents) {
+      event.startTime = Math.trunc(event.startTime) * 1.875 / bpm;
+      event.endTime = Math.trunc(event.endTime) * 1.875 / bpm;
+      if (chart.formatVersion == 3) { // it should not be anything other than 3
+        event.start = (event.start - 0.5) * 10 * effectiveAspect;
+        event.end = (event.end - 0.5) * 10 * effectiveAspect;
+        event.start2 = (event.start2 - 0.5) * 10;
+        event.end2 = (event.end2 - 0.5) * 10;
+      }
+    }
+    for (let event of line.judgeLineRotateEvents) {
+      event.startTime = Math.trunc(event.startTime) * 1.875 / bpm;
+      event.endTime = Math.trunc(event.endTime) * 1.875 / bpm;
+    }
+  }
 }
 
-function drawJudgeLine(x, y, angle) {
+function getLineEvent(events, nowTime) {
+  let activeEvent = events[0];
+  for (let event of events) {
+    if (nowTime < event.startTime) break;
+    activeEvent = event;
+    if (nowTime < event.endTime) break;
+  }
+  return activeEvent;
+}
+
+function drawJudgeLine(x, y, angle, alpha) {
   let length = 1920 * 3 * screenHeight / 1000;
   let thickness = 3 * 2.5 * screenHeight / 1000;
-  let worldX = percentageToWorldX(x);
-  let worldY = percentageToWorldY(y);
   ctx.save();
-  ctx.translate(worldToScreenX(worldX), worldToScreenY(worldY));
+  ctx.globalAlpha = alpha;
+  ctx.translate(worldToScreenX(x), worldToScreenY(y));
   ctx.rotate(-angle * Math.PI / 180);
   ctx.fillStyle = "#fff";
   ctx.fillRect(-length / 2, -thickness / 2, length, thickness);
@@ -130,9 +198,18 @@ function drawJudgeLine(x, y, angle) {
 
 function drawJudgeLines() {
   if (!level.chart) return;
-
   for (let line of level.chart.judgeLineList) {
-    drawJudgeLine(0.5, Math.random(), 0);
+    let moveEvent = getLineEvent(line.judgeLineMoveEvents, level.nowTime);
+    let rotateEvent = getLineEvent(line.judgeLineRotateEvents, level.nowTime);
+    let disappearEvent = getLineEvent(line.judgeLineDisappearEvents, level.nowTime);
+    let moveT = inverseLerp(moveEvent.startTime, moveEvent.endTime, level.nowTime);
+    let rotateT = inverseLerp(rotateEvent.startTime, rotateEvent.endTime, level.nowTime);
+    let disappearT = inverseLerp(disappearEvent.startTime, disappearEvent.endTime, level.nowTime);
+    let x = lerp(moveEvent.start, moveEvent.end, moveT);
+    let y = lerp(moveEvent.start2, moveEvent.end2, moveT);
+    let angle = lerp(rotateEvent.start, rotateEvent.end, rotateT);
+    let alpha = lerp(disappearEvent.start, disappearEvent.end, disappearT);
+    drawJudgeLine(x, y, angle, alpha);
   }
 }
 
@@ -476,6 +553,7 @@ zipInput.addEventListener("change", async () => {
     level.info.previewStart = Number(level.info.previewStart || 0.0);
     level.info.previewEnd = Number(level.info.previewEnd || level.info.previewStart + 15.0);
     level.chart = await loadZipContent(level.info.chart, "json");
+    prepareChart(level.chart);
     level.music = await loadZipContent(level.info.music, "audio");
     level.illustration = await loadZipContent(level.info.illustration, "image");
     level.illustrationBlur = await loadZipContent(level.info.illustrationBlur, "image");
