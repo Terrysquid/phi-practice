@@ -6,6 +6,28 @@ const noteRing = new Image();
 noteRing.src = "assets/NoteRing.png";
 const pauseAudio = new Audio("assets/Tap6.wav");
 pauseAudio.preload = "auto";
+const tapNote = new Image();
+tapNote.src = "assets/Tap2.png";
+const tapNoteHL = new Image();
+tapNoteHL.src = "assets/Tap2HL.png";
+const dragNote = new Image();
+dragNote.src = "assets/Drag.png";
+const dragNoteHL = new Image();
+dragNoteHL.src = "assets/DragHL.png";
+const flickNote = new Image();
+flickNote.src = "assets/Flick2.png";
+const flickNoteHL = new Image();
+flickNoteHL.src = "assets/Flick2HL.png";
+const holdBody = new Image();
+holdBody.src = "assets/Hold.png";
+const holdHead = new Image();
+holdHead.src = "assets/Hold_Head.png";
+const holdEnd = new Image();
+holdEnd.src = "assets/Hold_End.png";
+const holdHLHead = new Image();
+holdHLHead.src = "assets/Hold2HL_0.png";
+const holdHLBody = new Image();
+holdHLBody.src = "assets/Hold2HL_1.png";
 const backIcon = new Image();
 backIcon.src = "assets/Back.png";
 const retryIcon = new Image();
@@ -35,7 +57,15 @@ let level = {
 };
 
 let settings = {
-  offset: 0.0
+  speed: 6.0, // 流速
+  offset: 0.0, // 谱面延时
+  noteScale: 1.0, // 按键缩放
+  backgroundAlpha: 0.85, // 背景亮度(?)
+  hitFxIsOn: true, // 开启打击音效
+  musicVol: 1.0, // 音乐音量
+  SEVol: 1.0, // 界面音效音量
+  HitFXVol: 1.0, // 打击音效音量
+  isLowRes: false, // 低分辨率模式
 };
 
 let screenWidth = 0;
@@ -114,8 +144,12 @@ function screenToWorldX(x) {
 function screenToWorldY(y) {
   return (screenHeight / 2 - y) * 10 / screenHeight;
 }
+function imageReady(image) {
+  return image && image.complete && image.naturalWidth != 0;
+}
 
 function prepareChart(chart) {
+  let notes = [];
   for (let lineIndex = 0; lineIndex < chart.judgeLineList.length; lineIndex++) {
     let line = chart.judgeLineList[lineIndex];
     let bpm = line.bpm;
@@ -125,8 +159,10 @@ function prepareChart(chart) {
       note.realTime = note.time * 1.875 / bpm;
       note.holdTime = Math.trunc(note.holdTime + 0.0001) * 1.875 / bpm;
       note.judgeLineIndex = lineIndex * 2;
+      note.side = 0;
       note.noteIndex = noteIndex;
       note.isJudged = false;
+      notes.push(note);
     }
     for (let noteIndex = 0; noteIndex < line.notesBelow.length; noteIndex++) {
       let note = line.notesBelow[noteIndex];
@@ -134,8 +170,10 @@ function prepareChart(chart) {
       note.realTime = note.time * 1.875 / bpm;
       note.holdTime = Math.trunc(note.holdTime + 0.0001) * 1.875 / bpm;
       note.judgeLineIndex = lineIndex * 2 + 1;
+      note.side = 1;
       note.noteIndex = noteIndex;
       note.isJudged = false;
+      notes.push(note);
     }
     for (let i = 0; i < line.speedEvents.length; i++) {
       let event = line.speedEvents[i];
@@ -172,6 +210,13 @@ function prepareChart(chart) {
       event.endTime = Math.trunc(event.endTime) * 1.875 / bpm;
     }
   }
+  notes.sort((a, b) => a.realTime - b.realTime);
+  for (let i = 0; i < notes.length; i++) {
+    notes[i].isHL = (
+      (i > 0 && Math.abs(notes[i - 1].realTime - notes[i].realTime) <= 0.001) ||
+      (i < notes.length - 1 && Math.abs(notes[i + 1].realTime - notes[i].realTime) < 0.001)
+    );
+  }
 }
 
 function getLineEvent(events, nowTime) {
@@ -182,6 +227,75 @@ function getLineEvent(events, nowTime) {
     if (nowTime < event.endTime) break;
   }
   return activeEvent;
+}
+
+function drawNote(note, currentFloor) {
+  if (note.type == 1 || note.type == 2 || note.type == 4) {
+    let image;
+    if (note.type == 1) image = note.isHL ? tapNoteHL : tapNote;
+    else if (note.type == 2) image = note.isHL ? dragNoteHL : dragNote;
+    else if (note.type == 4) image = note.isHL ? flickNoteHL : flickNote;
+    if (!imageReady(image)) return;
+    let distance = note.floorPosition - currentFloor;
+    let headY = distance * note.speed * settings.speed; // to differ from dy for holds
+    let tolerance = Math.max(note.floorPosition / 6000000, 0.001);
+    if (level.nowTime <= note.realTime && (distance < -tolerance || headY > 20)) return;
+    let scale = visibleWidth / 8000 * settings.noteScale;
+    let width = image.naturalWidth * scale;
+    let height = image.naturalHeight * scale;
+    ctx.save();
+    ctx.translate(note.positionX * screenHeight / 10, 0);
+    if (note.side == 1) ctx.rotate(Math.PI);
+    ctx.translate(0, -headY * screenHeight / 10);
+    ctx.drawImage(image, -width / 2, -height / 2, width, height);
+    ctx.restore();
+  }
+  else if (note.type == 3) {
+    let body = note.isHL ? holdHLBody : holdBody;
+    let head = note.isHL ? holdHLHead : holdHead;
+    let end = holdEnd;
+    if (!imageReady(body) || !imageReady(head) || !imageReady(end)) return;
+    if (level.nowTime > note.realTime + note.holdTime) return;
+    let distance = note.floorPosition - currentFloor;
+    let headY = distance * settings.speed;
+    let tolerance = Math.max(note.floorPosition / 6000000, 0.001);
+    if (level.nowTime <= note.realTime && (distance < -tolerance || headY > 20)) return;
+    let started = level.nowTime >= note.realTime;
+    if (started) headY = 0;
+    let remaining = started ? note.realTime + note.holdTime - level.nowTime : note.holdTime;
+    let dy = remaining * note.speed * settings.speed;
+    if (dy <= 0) return;
+    let endY = headY + dy;
+    let scale = visibleWidth / 8000 * settings.noteScale;
+    let bodyScale = body == holdHLBody ? 1089 / 1062 : 1;
+    let headScale = head == holdHLHead ? 1089 / 1062 : 1;
+    let bodyWidth = body.naturalWidth * bodyScale * scale;
+    let bodyHeight = dy * screenHeight / 10;
+    let headWidth = head.naturalWidth * headScale * scale;
+    let headHeight = head.naturalHeight * headScale * scale;
+    let endWidth = end.naturalWidth * scale;
+    let endHeight = end.naturalHeight * scale;
+    // end is slightly overlapping body
+    let bodyWorldHeight = body == holdHLBody ? (2048 * 19 / 21) / (100 * 1062 / 1089) : 19;
+    let overlap = bodyHeight * (bodyWorldHeight - 18.99) / bodyWorldHeight;
+    let headScreenY = -headY * screenHeight / 10;
+    let endScreenY = -endY * screenHeight / 10;
+    ctx.save();
+    ctx.translate(note.positionX * screenHeight / 10, 0);
+    if (note.side == 1) ctx.rotate(Math.PI);
+    ctx.drawImage(body, -bodyWidth / 2, endScreenY, bodyWidth, bodyHeight);
+    if (!started) {
+      ctx.drawImage(head, -headWidth / 2, headScreenY, headWidth, headHeight);
+    }
+    ctx.drawImage(end, -endWidth / 2, endScreenY + overlap - endHeight, endWidth, endHeight);
+    ctx.restore();
+  }
+}
+
+function drawNotes(notes, currentFloor, type) {
+  for (let note of notes) {
+    if (note.type == type) drawNote(note, currentFloor);
+  }
 }
 
 function drawJudgeLine(x, y, angle, alpha) {
@@ -198,6 +312,7 @@ function drawJudgeLine(x, y, angle, alpha) {
 
 function drawJudgeLines() {
   if (!level.chart) return;
+  let lineStates = [];
   for (let line of level.chart.judgeLineList) {
     let moveEvent = getLineEvent(line.judgeLineMoveEvents, level.nowTime);
     let rotateEvent = getLineEvent(line.judgeLineRotateEvents, level.nowTime);
@@ -209,14 +324,29 @@ function drawJudgeLines() {
     let y = lerp(moveEvent.start2, moveEvent.end2, moveT);
     let angle = lerp(rotateEvent.start, rotateEvent.end, rotateT);
     let alpha = lerp(disappearEvent.start, disappearEvent.end, disappearT);
-    drawJudgeLine(x, y, angle, alpha);
+    let speedEvent = getLineEvent(line.speedEvents, level.nowTime);
+    let currentFloor = speedEvent.floorPosition + (level.nowTime - speedEvent.startTime) * speedEvent.value;
+    lineStates.push({ line, x, y, angle, alpha, currentFloor });
+  }
+
+  for (let state of lineStates) { // lines
+    drawJudgeLine(state.x, state.y, state.angle, state.alpha);
+  }
+  for (let type of [3, 1, 2, 4]) { // notes: hold -> tap -> drag -> flick
+    for (let state of lineStates) {
+      ctx.save();
+      ctx.translate(worldToScreenX(state.x), worldToScreenY(state.y));
+      ctx.rotate(-state.angle * Math.PI / 180);
+      drawNotes(state.line.notesAbove, state.currentFloor, type);
+      drawNotes(state.line.notesBelow, state.currentFloor, type);
+      ctx.restore();
+    }
   }
 }
-
 function drawBackground() {
   // temporary
   let image = level.illustrationBlur;
-  if (!image || !image.complete || image.naturalWidth == 0) return;
+  if (!imageReady(image)) return;
   let height = screenHeight;
   let width = image.naturalWidth / image.naturalHeight * height;
   let x = (screenWidth - width) / 2;
@@ -227,7 +357,7 @@ function drawBackground() {
 }
 
 function drawPauseRing() {
-  if (pauseTime <= 0 || !noteRing.complete || noteRing.naturalWidth == 0) return;
+  if (pauseTime <= 0 || !imageReady(noteRing)) return;
   let x = uiToScreenX(-838.3 + 500 * 16 / 9 - uiHalfWidth() - 1.7);
   let y = uiToScreenY(444.3 + 0.69);
   let size = 63.488 * screenHeight / 1000;
@@ -240,7 +370,7 @@ function drawPauseRing() {
 }
 
 function drawPause() {
-  if (!pauseIcon.complete || pauseIcon.naturalWidth == 0) return;
+  if (!imageReady(pauseIcon)) return;
   let x = uiToScreenX(-838.3 + 500 * 16 / 9 - uiHalfWidth());
   let y = uiToScreenY(444.3);
   let width = 34.262 * screenHeight / 1000;
@@ -249,7 +379,7 @@ function drawPause() {
 }
 
 function drawPauseBarButton(icon, x, y) {
-  if (!icon.complete || icon.naturalWidth == 0) return;
+  if (!imageReady(icon)) return;
   let centerX = uiToScreenX(x);
   let centerY = uiToScreenY(y);
   let boxSize = 82.08 * screenHeight / 1000;
