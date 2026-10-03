@@ -1,3 +1,172 @@
+const BlockAreaEasing = (type, t) => {
+  t = Math.max(0, Math.min(1, t));
+  if (type === 1) return 1 - Math.cos(t * Math.PI / 2);
+  if (type === 2) return Math.sin(t * Math.PI / 2);
+  if (type === 3) return (1 - Math.cos(t * Math.PI)) / 2;
+  if (type >= 4 && type <= 15) {
+    const power = 2 + Math.floor((type - 4) / 3);
+    const mode = (type - 4) % 3;
+    if (mode === 0) return t ** power;
+    if (mode === 1) return 1 - (1 - t) ** power;
+    return t < 0.5 ? (2 * t) ** power / 2 : 1 - (2 * (1 - t)) ** power / 2;
+  }
+  return t;
+};
+
+class BlockAreaRenderer {
+  constructor() {
+    this.areas = [];
+    this.active = [];
+    this.states = [];
+    this.cursor = 0;
+    this.lastTime = -Infinity;
+    this.layer = null;
+  }
+
+  load(areas = []) {
+    this.areas = (Array.isArray(areas) ? areas : []).map(area => ({
+      ...area,
+      rotateEvents: [...(area.rotateEvents || [])].sort((a, b) => a.time - b.time),
+      moveEvents: [...(area.moveEvents || [])].sort((a, b) => a.time - b.time),
+      scaleEvents: [...(area.scaleEvents || [])].sort((a, b) => a.time - b.time)
+    })).sort((a, b) => a.appearTime - b.appearTime);
+    this.active = [];
+    this.states = [];
+    this.cursor = 0;
+    this.lastTime = -Infinity;
+  }
+
+  static sample(events, time, field, fallback) {
+    if (!events.length) return { value: fallback, anchor: null };
+    // Upper bound also makes duplicate-time keyframes deterministic.
+    let lo = 0, hi = events.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (events[mid].time <= time) lo = mid + 1;
+      else hi = mid;
+    }
+    const from = events[Math.max(0, lo - 1)];
+    const to = events[Math.min(lo, events.length - 1)];
+    const t = to.time > from.time ? Math.max(0, Math.min(1, (time - from.time) / (to.time - from.time))) : 1;
+    const mix = (a, b, ease) => a + (b - a) * BlockAreaEasing(ease, t);
+    const value = typeof fallback === "number"
+      ? mix(from[field], to[field], to.easeType)
+      : {
+        x: mix(from[field].x, to[field].x, to.easeTypeX),
+        y: mix(from[field].y, to[field].y, to.easeTypeY)
+      };
+    return { value, anchor: to.anchor || from.anchor };
+  }
+
+  static state(area, time, width, height) {
+    const low = area.bottomLeftPercentage, high = area.topRightPercentage;
+    const center = { x: (low.x + high.x) / 2, y: (low.y + high.y) / 2 };
+    const move = this.sample(area.moveEvents, time, "endPosition", center).value;
+    const scale = this.sample(area.scaleEvents, time, "scale", { x: 1, y: 1 });
+    const rotation = this.sample(area.rotateEvents, time, "rotation", 0);
+    const sa = scale.anchor || center, ra = rotation.anchor || center;
+    const angle = rotation.value * Math.PI / 180;
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const points = [[low.x, low.y], [high.x, low.y], [high.x, high.y], [low.x, high.y]].map(([x, y]) => {
+      // Rotate in physical space so a rectangle stays rectangular at any aspect.
+      x = (sa.x + (x - sa.x) * scale.value.x - ra.x) * width;
+      y = (sa.y + (y - sa.y) * scale.value.y - ra.y) * height;
+      return {
+        x: (ra.x + move.x - center.x) * width + x * cos - y * sin,
+        y: height - ((ra.y + move.y - center.y) * height + x * sin + y * cos)
+      };
+    });
+    let opacity = 1;
+    if (time < area.enableTime && area.enableTime > area.appearTime) {
+      opacity = (time - area.appearTime) / (area.enableTime - area.appearTime);
+    } else if (time >= area.disableTime && area.disappearTime > area.disableTime) {
+      opacity = (area.disappearTime - time) / (area.disappearTime - area.disableTime);
+    }
+    return { area, points, opacity: Math.max(0, Math.min(1, opacity)) };
+  }
+
+  update(time, width, height) {
+    if (time < this.lastTime) {
+      this.cursor = 0;
+      this.active = [];
+    }
+    while (this.cursor < this.areas.length && this.areas[this.cursor].appearTime <= time) {
+      const area = this.areas[this.cursor++];
+      if (time < area.disappearTime) this.active.push(area);
+    }
+    this.active = this.active.filter(area => time < area.disappearTime);
+    this.states = this.active.map(area => BlockAreaRenderer.state(area, time, width, height));
+    this.lastTime = time;
+  }
+
+  static contains(points, x, y) {
+    let positive = false, negative = false, twiceArea = 0;
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i], b = points[(i + 1) % points.length];
+      const cross = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+      positive ||= cross > 1e-7;
+      negative ||= cross < -1e-7;
+      twiceArea += a.x * b.y - b.x * a.y;
+    }
+    // Accept either winding (negative scales), but not collapsed rectangles.
+    return Math.abs(twiceArea) > 1e-7 && !(positive && negative);
+  }
+
+  isBlocked(x, y, width, height) {
+    if (x < 0 || y < 0 || x > width || y > height) return false;
+    let blocked = false;
+    for (const { area, points } of this.states) {
+      if (this.lastTime < area.enableTime || this.lastTime >= area.disableTime) continue;
+      if (!BlockAreaRenderer.contains(points, x, y)) continue;
+      if (area.isSubtract) return false;
+      blocked = true;
+    }
+    return blocked;
+  }
+
+  draw(ctx, left, width, height, pixelRatio) {
+    if (!this.states.length) return;
+    if (!this.layer) this.layer = document.createElement("canvas");
+    // Supersample the complete mask, including cutouts, before compositing.
+    // Two samples per CSS pixel keep rotated edges smooth on standard displays.
+    const renderScale = Math.max(2, pixelRatio);
+    const w = Math.max(1, Math.round(width * renderScale));
+    const h = Math.max(1, Math.round(height * renderScale));
+    if (this.layer.width !== w || this.layer.height !== h) {
+      this.layer.width = w;
+      this.layer.height = h;
+    }
+    const overlay = this.layer.getContext("2d");
+    overlay.setTransform(w / width, 0, 0, h / height, 0, 0);
+    overlay.clearRect(0, 0, width, height);
+    overlay.fillStyle = "#ff304b";
+    // Union first, then cutouts, independent of JSON ordering. Apply the final
+    // transparency once so dense overlapping rectangles do not become opaque.
+    for (const subtract of [false, true]) {
+      overlay.globalCompositeOperation = subtract ? "destination-out" : "source-over";
+      for (const state of this.states) {
+        if (!!state.area.isSubtract !== subtract || state.opacity <= 0) continue;
+        overlay.globalAlpha = state.opacity;
+        overlay.beginPath();
+        state.points.forEach((p, i) => i ? overlay.lineTo(p.x, p.y) : overlay.moveTo(p.x, p.y));
+        overlay.closePath();
+        overlay.fill();
+      }
+    }
+    overlay.globalAlpha = 1;
+    overlay.globalCompositeOperation = "source-over";
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, 0, width, height);
+    ctx.clip();
+    ctx.globalAlpha = 0.3;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(this.layer, left, 0, width, height);
+    ctx.restore();
+  }
+}
+
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const pauseIcon = new Image();
@@ -45,6 +214,13 @@ retryIcon.src = "assets/Retry.png";
 const resumeIcon = new Image();
 resumeIcon.src = "assets/Resume.png";
 const zipInput = document.getElementById("zipInput");
+const settingsButton = document.getElementById("settingsButton");
+const settingsDialog = document.getElementById("settingsDialog");
+const noteSpeedInput = document.getElementById("noteSpeed");
+const globalSpeedInput = document.getElementById("globalSpeed");
+const musicSeekInput = document.getElementById("musicSeek");
+const seekTimeOutput = document.getElementById("seekTime");
+const musicDurationText = document.getElementById("musicDuration");
 
 let level = {
   zip: null,
@@ -59,13 +235,19 @@ let level = {
   musicSource: null,
   musicStartTime: 0,
   musicOffset: 0,
+  musicPlaybackRate: 1,
   illustration: null, // not used yet
   illustrationBlur: null,
   illustrationLowRes: null // not used yet
 };
 
 let settings = {
-  speed: 6.0, // 流速
+  speed: 6.0, // 流速， 默认6.0
+  globalSpeed: 1.0,
+  showAccuracy: true,
+  showJudgement: true,
+  showTouchPoints: true,
+  autoplay: false,
   dpi: 264, // Screen.dpi
   offset: 0.0, // 谱面延时
   noteScale: 1.0, // 按键缩放
@@ -95,6 +277,7 @@ let lineStates = [];
 let fingers = [];
 let fingerById = new Map();
 let pendingFingerEvents = [];
+const blockAreas = new BlockAreaRenderer();
 
 class ScoreControl {
   constructor() {
@@ -104,7 +287,8 @@ class ScoreControl {
   reset(totalNotes = 0) {
     this.totalNotes = totalNotes;
     this.score = 0;
-    this.percent = 0;
+    this.percent = 100;
+    this.lastJudgement = null;
     this.scoreOfNote = 0;
     this.combo = 0;
     this.maxCombo = 0;
@@ -122,7 +306,8 @@ class ScoreControl {
     if (this.totalNotes <= 0) return;
     this.scoreOfNote = 900000 * (this.perfect + 0.65 * this.good) / this.totalNotes;
     this.score = this.scoreOfNote + 100000 * this.maxCombo / this.totalNotes;
-    this.percent = this.scoreOfNote / 900000 * 100;
+    let judgedNotes = this.perfect + this.good + this.bad + this.miss;
+    this.percent = judgedNotes > 0 ? (this.perfect + 0.65 * this.good) / judgedNotes * 100 : 100;
   }
 
   getScoreText() {
@@ -133,6 +318,12 @@ class ScoreControl {
     if (note.judgeResult) return false;
     note.judgeResult = result;
     note.judgeTime = judgeTime;
+    this.lastJudgement = {
+      result,
+      // Convert chart seconds to actual milliseconds at the time of the hit.
+      milliseconds: Math.round(judgeTime / (note.judgePlaybackRate || settings.globalSpeed) * 1000),
+      time: level.nowTime
+    };
     return true;
   }
 
@@ -303,10 +494,12 @@ class HoldControl {
           this.judged = true;
           this.isPerfect = true;
           this.judgeTime = -dt;
+          this.note.judgePlaybackRate = settings.globalSpeed;
         } else if (Math.abs(dt) < goodTimeRange) {
           this.judged = true;
           this.isPerfect = false;
           this.judgeTime = -dt;
+          this.note.judgePlaybackRate = settings.globalSpeed;
         }
       }
     }
@@ -314,7 +507,7 @@ class HoldControl {
     if (this.judged && !this.judgeOver) {
       let isHolding = false;
       for (let finger of fingers) {
-        if (!finger.pressed) continue;
+        if (!finger.pressed || finger.blocked) continue;
         let state = lineStates[Math.floor(this.note.judgeLineIndex / 2)];
         if (!state) continue;
         let position = fingerOnLine(finger, state);
@@ -366,7 +559,7 @@ class DragControl {
 
     if (Math.abs(dt) <= 0.1 && !this.isJudged) {
       for (let finger of fingers) {
-        if (!finger.pressed) continue;
+        if (!finger.pressed || finger.blocked) continue;
         let state = lineStates[Math.floor(this.note.judgeLineIndex / 2)];
         if (!state) continue;
         let position = fingerOnLine(finger, state);
@@ -431,20 +624,25 @@ function createNoteControl(note) {
   return null;
 }
 
-function resetNoteControls() {
+function resetNoteControls(fromTime = -Infinity) {
   noteControls = [];
-  scoreControl.reset(chartNoteSortByTime.length);
+  let remainingNotes = 0;
   for (let note of chartNoteSortByTime) {
-    note.isJudged = false;
-    note.isJudgedForFlick = false;
-    note.judgeResult = null;
+    let skipped = note.realTime < fromTime;
+    note.isJudged = skipped;
+    note.isJudgedForFlick = skipped;
+    note.judgeResult = skipped ? "Skipped" : null;
     note.judgeTime = null;
-    note.control = createNoteControl(note);
+    note.judgePlaybackRate = null;
+    note.control = skipped ? null : createNoteControl(note);
     if (note.control) noteControls.push(note.control);
+    if (!skipped) remainingNotes++;
   }
+  scoreControl.reset(remainingNotes);
 }
 
 function prepareChart(chart) {
+  blockAreas.load(chart.blockAreaList);
   let notes = [];
   for (let lineIndex = 0; lineIndex < chart.judgeLineList.length; lineIndex++) {
     let line = chart.judgeLineList[lineIndex];
@@ -731,6 +929,34 @@ function drawScore(score) {
   ctx.restore();
 }
 
+function drawPercent(percent) {
+  let x = uiToScreenX(651.5 + 400 / 2 + uiHalfWidth() - 500 * 16 / 9);
+  let y = uiToScreenY(400);
+  let fontSize = 28 * screenHeight / 1000;
+  ctx.save();
+  ctx.font = `${fontSize}px "Phigros UI"`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`ACC ${percent.toFixed(2)}%`, x, y);
+  ctx.restore();
+}
+
+function drawJudgement() {
+  let judgement = scoreControl.lastJudgement;
+  if (!judgement || level.nowTime - judgement.time > 1.2) return;
+  let timing = judgement.milliseconds;
+  let text = judgement.result == "Miss" ? "Miss" :
+    `${judgement.result} ${timing >= 0 ? "+" : ""}${timing} ms`;
+  ctx.save();
+  ctx.font = `${28 * screenHeight / 1000}px "Phigros UI"`;
+  ctx.fillStyle = { Perfect: "#ffe8a3", Good: "#a5d8ff", Bad: "#ffb38a", Miss: "#ff8080" }[judgement.result];
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, uiToScreenX(0), uiToScreenY(355));
+  ctx.restore();
+}
+
 function drawCombo(combo) {
   let x = uiToScreenX(0);
   let y = uiToScreenY(452);
@@ -753,7 +979,7 @@ function drawComboText() {
   ctx.fillStyle = "#fff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("COMBO", x, y);
+  ctx.fillText(settings.autoplay ? "AUTOPLAY" : "COMBO", x, y);
   ctx.restore();
 }
 
@@ -796,9 +1022,44 @@ function resizeCanvas() {
   visibleWidth = Math.min(screenWidth, screenHeight * 16 / 9);
   sideMaskWidth = (screenWidth - visibleWidth) / 2;
   effectiveAspect = visibleWidth / screenHeight;
+  settingsButton.style.left = `${Math.max(24, sideMaskWidth + 50.589 * screenHeight / 1000)}px`;
+  settingsButton.style.top = `${Math.max(24, 55.7 * screenHeight / 1000)}px`;
   canvas.width = Math.max(1, Math.round(screenWidth * deviceScale));
   canvas.height = Math.max(1, Math.round(screenHeight * deviceScale));
   ctx.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
+}
+
+function drawTouchPoints() {
+  if (!settings.showTouchPoints || paused) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(sideMaskWidth, 0, visibleWidth, screenHeight);
+  ctx.clip();
+  const radius = Math.max(32, screenHeight * 0.08);
+  for (const finger of fingers) {
+    if (!finger.pressed) continue;
+    const x = worldToScreenX(finger.nowPosition.x);
+    const y = worldToScreenY(finger.nowPosition.y);
+    ctx.strokeStyle = finger.blocked ? "#ff647c" : "#b7efff";
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(3, screenHeight * 0.005), 0, Math.PI * 2);
+    ctx.fill();
+    // Repeating expanding rings stay centered on the current contact. Their
+    // lifetime belongs to the finger, so releasing leaves no trailing effects.
+    for (let i = 0; i < 2; i++) {
+      const age = finger.touchAge - i * 0.325;
+      if (age < 0) continue;
+      const progress = (age % 0.65) / 0.65;
+      ctx.globalAlpha = 0.65 * (1 - progress);
+      ctx.lineWidth = Math.max(1.5, screenHeight * 0.002);
+      ctx.beginPath();
+      ctx.arc(x, y, 6 + radius * progress, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 function drawFrame() {
@@ -808,7 +1069,10 @@ function drawFrame() {
   ctx.fillRect(0, 0, screenWidth, screenHeight);
   drawBackground();
 
+  blockAreas.update(level.nowTime, visibleWidth, screenHeight);
+  blockAreas.draw(ctx, sideMaskWidth, visibleWidth, screenHeight, deviceScale);
   drawJudgeLines();
+  drawTouchPoints();
   if (sideMaskWidth > 0) {
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, sideMaskWidth, screenHeight);
@@ -817,10 +1081,12 @@ function drawFrame() {
   drawPause();
   drawPauseRing();
   drawScore(scoreControl.getScoreText());
+  if (settings.showAccuracy) drawPercent(scoreControl.percent);
+  if (settings.showJudgement) drawJudgement();
   if (scoreControl.combo >= 3) {
     drawCombo(scoreControl.combo);
-    drawComboText();
   }
+  if (scoreControl.combo >= 3 || settings.autoplay) drawComboText();
   drawSongsName(level.info.name);
   drawSongsLevel(level.info.level);
   if (paused) drawPauseBar();
@@ -856,6 +1122,10 @@ function queueFingerEvent(fingerId, phase, clientX, clientY) {
 }
 
 function syncFingers() {
+  // Refresh before judging, including when an animated area moves onto a
+  // stationary finger. Rendering uses the same transformed polygons.
+  blockAreas.update(level.nowTime, visibleWidth, screenHeight);
+  const rect = canvas.getBoundingClientRect();
   for (let finger of fingers) {
     finger.isNewClick = false;
     finger.lastPosition = finger.nowPosition;
@@ -864,15 +1134,19 @@ function syncFingers() {
   }
   for (let event of pendingFingerEvents) {
     let position = {
-      x: screenToWorldX(event.clientX),
-      y: screenToWorldY(event.clientY)
+      x: screenToWorldX(event.clientX - rect.left),
+      y: screenToWorldY(event.clientY - rect.top)
     };
     let finger = fingerById.get(event.fingerId);
-    if (!finger) {
+    if (event.phase === "began") {
+      // A release and new press may share an ID and arrive in the same frame.
+      if (finger) fingers.splice(fingers.indexOf(finger), 1);
       finger = {
         fingerId: event.fingerId,
-        pressed: event.phase != "ended" && event.phase != "canceled",
-        isNewClick: event.phase == "began",
+        pressed: true,
+        blocked: false,
+        touchAge: 0,
+        isNewClick: true,
         isNewFlick: false,
         stopped: true,
         lastPosition: position,
@@ -882,23 +1156,47 @@ function syncFingers() {
       };
       fingers.push(finger);
       fingerById.set(event.fingerId, finger);
+      updateFingerBlock(finger);
       continue;
     }
+    // Stray motion after pause/cancel is not a new contact.
+    if (!finger || !finger.pressed) continue;
     finger.nowPosition = position;
     finger.nowMove = {
       x: finger.nowPosition.x - finger.lastPosition.x,
       y: finger.nowPosition.y - finger.lastPosition.y
     };
     finger.pressed = event.phase != "ended" && event.phase != "canceled";
-    if (event.phase == "began") finger.isNewClick = true;
+    updateFingerBlock(finger);
+    if (event.phase === "canceled") {
+      finger.isNewClick = false;
+      finger.isNewFlick = false;
+    }
   }
   pendingFingerEvents = [];
+  for (const finger of fingers) {
+    if (finger.pressed) updateFingerBlock(finger);
+  }
+}
+
+function updateFingerBlock(finger) {
+  // Latch for the entire contact: sliding back out never re-enables judging.
+  finger.blocked ||= blockAreas.isBlocked(
+    worldToScreenX(finger.nowPosition.x) - sideMaskWidth,
+    worldToScreenY(finger.nowPosition.y), visibleWidth, screenHeight
+  );
+  if (finger.blocked) {
+    finger.isNewClick = false;
+    finger.isNewFlick = false;
+    finger.stopped = true;
+  }
 }
 
 function updateFlickTrigger(deltaTime) {
   if (deltaTime <= 0) return;
   let flickJudgeSpeed = 0.06 / 380 * settings.dpi;
   for (let finger of fingers) {
+    if (finger.blocked) continue;
     if (!finger.pressed && finger.nowMove.x == 0 && finger.nowMove.y == 0) continue;
     let lastMoveLength = Math.hypot(finger.lastMove.x, finger.lastMove.y);
     let flickSpeed = 0;
@@ -1038,6 +1336,7 @@ function CheckFlick(finger) {
 
 function updateNoteMatching() {
   for (let finger of fingers) {
+    if (finger.blocked) continue;
     if (finger.isNewClick) CheckNote(finger);
     if (finger.isNewFlick) CheckFlick(finger);
   }
@@ -1045,12 +1344,34 @@ function updateNoteMatching() {
 
 function updateNoteControls() {
   for (let i = noteControls.length - 1; i >= 0; i--) {
-    if (noteControls[i].Judge()) noteControls.splice(i, 1);
+    const control = noteControls[i];
+    if (settings.autoplay) {
+      const note = control.note;
+      if (level.nowTime < note.realTime) continue;
+      note.isJudged = true;
+      if (note.type === 4) note.isJudgedForFlick = true;
+      if (note.type === 3) {
+        // Sustain holds until their tails. Keep the manual controller coherent
+        // if autoplay is switched off while a hold is in progress.
+        control.isJudged = true;
+        control.judged = true;
+        control.isPerfect = true;
+        control.judgeTime = 0;
+        control.safeFrame = 2;
+        if (level.nowTime < note.realTime + note.holdTime) continue;
+        control.judgeOver = true;
+      }
+      scoreControl.Perfect(note, 0);
+      noteControls.splice(i, 1);
+    } else if (control.Judge()) {
+      noteControls.splice(i, 1);
+    }
   }
 }
 
 function updateFingers(deltaTime) {
   syncFingers();
+  if (settings.autoplay) return;
   updateFlickTrigger(deltaTime);
   updateNoteMatching();
 }
@@ -1065,6 +1386,7 @@ function finishFingerFrame() {
 
 function pauseLevel() {
   stopMusic();
+  updateSeekBar();
   clearFingers();
   playPauseSound();
 }
@@ -1093,6 +1415,37 @@ function retryLevel() {
   level.startDelay = 1.5;
   resetNoteControls();
   clearFingers();
+  updateSeekBar();
+}
+
+function formatMusicTime(seconds) {
+  let wholeSeconds = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
+}
+
+function updateSeekBar() {
+  let duration = level.music ? level.music.duration : 0;
+  musicSeekInput.disabled = !level.chart || duration <= 0;
+  musicSeekInput.max = duration;
+  musicSeekInput.value = level.audioTime;
+  seekTimeOutput.value = formatMusicTime(level.audioTime);
+  musicDurationText.textContent = formatMusicTime(duration);
+  musicSeekInput.setAttribute("aria-valuetext", `${formatMusicTime(level.audioTime)} / ${formatMusicTime(duration)}`);
+}
+
+function seekLevel(time) {
+  if (!paused || !level.chart || !level.music || !Number.isFinite(time)) return;
+  stopMusic();
+  level.audioTime = Math.max(0, Math.min(time, level.music.duration));
+  level.nowTime = Math.max(0, level.audioTime - (level.chart.offset + settings.offset));
+  level.startTime = -1;
+  pauseTime = 0;
+  // Start a fresh practice section; earlier notes (including overlapping holds)
+  // are skipped without counting as misses. Seeking back makes them playable again.
+  resetNoteControls(level.audioTime === 0 ? -Infinity : level.nowTime);
+  clearFingers();
+  updateJudgeLineStates();
+  updateSeekBar();
 }
 
 function handlePausePointer(event) {
@@ -1124,6 +1477,7 @@ function handlePauseMenuPointer(event) {
 }
 
 function handlePointer(event) {
+  if (settingsDialog.open) return;
   unlockAudio();
   if (paused) {
     handlePauseMenuPointer(event);
@@ -1140,17 +1494,15 @@ function handlePointerDown(event) {
 }
 function handlePointerMove(event) {
   if (event.pointerType == "touch") return;
-  if (!fingerById.has(`pointer:${event.pointerId}`)) return;
+  if (!event.buttons) return;
   queueFingerEvent(`pointer:${event.pointerId}`, "moved", event.clientX, event.clientY);
 }
 function handlePointerUp(event) {
   if (event.pointerType == "touch") return;
-  if (!fingerById.has(`pointer:${event.pointerId}`)) return;
   queueFingerEvent(`pointer:${event.pointerId}`, "ended", event.clientX, event.clientY);
 }
 function handlePointerCancel(event) {
   if (event.pointerType == "touch") return;
-  if (!fingerById.has(`pointer:${event.pointerId}`)) return;
   queueFingerEvent(`pointer:${event.pointerId}`, "canceled", event.clientX, event.clientY);
 }
 
@@ -1214,6 +1566,8 @@ function requestMusicPlayback() {
   if (!level.music || level.musicSource) return;
   let source = audioContext.createBufferSource();
   source.buffer = level.music;
+  level.musicPlaybackRate = settings.globalSpeed;
+  source.playbackRate.value = level.musicPlaybackRate;
   source.connect(audioContext.destination);
   source.onended = () => source.disconnect();
   // Buffer sources have no playback-position property; retain their clock anchor.
@@ -1226,7 +1580,7 @@ function requestMusicPlayback() {
 function getMusicTime() {
   if (!level.musicSource) return level.audioTime;
   return Math.min(level.music.duration,
-    level.musicOffset + Math.max(0, audioContext.currentTime - level.musicStartTime));
+    level.musicOffset + Math.max(0, audioContext.currentTime - level.musicStartTime) * level.musicPlaybackRate);
 }
 
 function stopMusic() {
@@ -1242,7 +1596,7 @@ function stopMusic() {
 function updateLevelTime() {
   if (!level.chart || !level.music) return;
   let time = audioContext.currentTime;
-  if (level.startTime < 0) level.startTime = time + level.startDelay;
+  if (level.startTime < 0) level.startTime = time + level.startDelay / settings.globalSpeed;
   if (!level.musicSource && time >= level.startTime - 1.0) requestMusicPlayback();
   level.audioStarted = !!level.musicSource && audioContext.state == "running" &&
     time >= level.musicStartTime;
@@ -1266,11 +1620,61 @@ function gameLoop(now) {
     } else {
       syncFingers();
     }
+    for (const finger of fingers) {
+      if (finger.pressed) finger.touchAge += Math.max(0, deltaTime);
+    }
   }
   drawFrame();
   finishFingerFrame();
   requestAnimationFrame(gameLoop);
 }
+
+settingsButton.addEventListener("click", () => {
+  if (!paused) return;
+  if (settingsDialog.open) settingsDialog.close();
+  else settingsDialog.show();
+  syncSettingsPanel();
+});
+function syncSettingsPanel() {
+  let open = settingsDialog.open;
+  document.body.classList.toggle("settings-open", open);
+  settingsButton.setAttribute("aria-expanded", String(open));
+  for (let element of [canvas, zipInput, document.getElementById("pauseSeek")]) {
+    element.inert = open;
+  }
+  if (!open) settingsButton.focus();
+}
+settingsDialog.addEventListener("close", syncSettingsPanel);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && settingsDialog.open) {
+    settingsDialog.close();
+    syncSettingsPanel();
+  }
+});
+musicSeekInput.addEventListener("input", () => {
+  seekLevel(Number(musicSeekInput.value));
+});
+noteSpeedInput.addEventListener("input", () => {
+  settings.speed = Number(noteSpeedInput.value);
+  document.getElementById("noteSpeedValue").value = settings.speed.toFixed(1);
+});
+globalSpeedInput.addEventListener("input", () => {
+  settings.globalSpeed = Number(globalSpeedInput.value);
+  document.getElementById("globalSpeedValue").value = `${settings.globalSpeed.toFixed(2)}×`;
+});
+document.getElementById("showAccuracy").addEventListener("change", (event) => {
+  settings.showAccuracy = event.target.checked;
+});
+document.getElementById("showJudgement").addEventListener("change", (event) => {
+  settings.showJudgement = event.target.checked;
+});
+document.getElementById("showTouchPoints").addEventListener("change", (event) => {
+  settings.showTouchPoints = event.target.checked;
+});
+document.getElementById("autoplay").addEventListener("change", (event) => {
+  settings.autoplay = event.target.checked;
+  clearFingers();
+});
 
 window.addEventListener("resize", resizeCanvas);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resizeCanvas);
@@ -1292,12 +1696,14 @@ zipInput.addEventListener("change", async () => {
     clearFingers();
     level.info = {};
     level.chart = null;
+    blockAreas.load();
     level.nowTime = -3;
     level.startTime = -1;
     level.startDelay = 1.5;
     level.audioTime = 0;
     level.audioStarted = false;
     level.music = null;
+    updateSeekBar();
     level.illustration = null;
     level.illustrationBlur = null;
     level.illustrationLowRes = null;
@@ -1330,6 +1736,7 @@ zipInput.addEventListener("change", async () => {
     level.illustration = await loadZipContent(level.info.illustration, "image");
     level.illustrationBlur = await loadZipContent(level.info.illustrationBlur, "image");
     level.illustrationLowRes = await loadZipContent(level.info.illustrationLowRes, "image");
+    updateSeekBar();
   }
 });
 resizeCanvas();
