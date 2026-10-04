@@ -38,6 +38,18 @@ const holdHLHead = new Image();
 holdHLHead.src = "assets/Hold2HL_0.png";
 const holdHLBody = new Image();
 holdHLBody.src = "assets/Hold2HL_1.png";
+const hitEffectStyles = {
+  Perfect: { color: [1, 0.927049935, 0.627358496, 0.882352948], particleColor: "#ffeca0", count: 4 },
+  Good: { color: [0.705882370, 0.882352948, 1, 0.921568632], particleColor: "#b4e1ff", count: 3 }
+};
+const hitEffectAtlases = {};
+const hitEffectImage = new Image();
+hitEffectImage.onload = () => {
+  for (let result of ["Perfect", "Good"]) {
+    hitEffectAtlases[result] = tintHitEffectAtlas(hitEffectStyles[result].color);
+  }
+};
+hitEffectImage.src = "assets/HitEffect.png";
 const backIcon = new Image();
 backIcon.src = "assets/Back.png";
 const retryIcon = new Image();
@@ -91,6 +103,7 @@ let goodTimeRange = 0.18;
 let badTimeRange = 0.22;
 let chartNoteSortByTime = [];
 let noteControls = [];
+let hitEffects = [];
 let lineStates = [];
 let fingers = [];
 let fingerById = new Map();
@@ -136,15 +149,16 @@ class ScoreControl {
     return true;
   }
 
-  Perfect(note, judgeTime = 0) {
+  Perfect(note, judgeTime = 0, isHold = false) {
     if (!this.recordResult(note, "Perfect", judgeTime)) return;
     this.perfect++;
     this.combo++;
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     this.updateScore();
+    if (!isHold) spawnHitEffect(note, "Perfect");
   }
 
-  Good(note, judgeTime) {
+  Good(note, judgeTime, isHold = false) {
     if (!this.recordResult(note, "Good", judgeTime)) return;
     this.good++;
     this.combo++;
@@ -153,6 +167,7 @@ class ScoreControl {
     else this.late++;
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     this.updateScore();
+    if (!isHold) spawnHitEffect(note, "Good");
   }
 
   Bad(note, judgeTime = 0) {
@@ -308,6 +323,7 @@ class HoldControl {
           this.isPerfect = false;
           this.judgeTime = -dt;
         }
+        if (this.judged) spawnHitEffect(this.note, this.isPerfect ? "Perfect" : "Good");
       }
     }
 
@@ -336,8 +352,8 @@ class HoldControl {
       }
 
       if (tailTime - level.nowTime < badTimeRange) {
-        if (this.isPerfect) scoreControl.Perfect(this.note, this.judgeTime);
-        else scoreControl.Good(this.note, this.judgeTime);
+        if (this.isPerfect) scoreControl.Perfect(this.note, this.judgeTime, true);
+        else scoreControl.Good(this.note, this.judgeTime, true);
         this.note.isJudged = true;
         this.judgeOver = true;
         return true;
@@ -433,6 +449,7 @@ function createNoteControl(note) {
 
 function resetNoteControls() {
   noteControls = [];
+  hitEffects = [];
   scoreControl.reset(chartNoteSortByTime.length);
   for (let note of chartNoteSortByTime) {
     note.isJudged = false;
@@ -595,6 +612,119 @@ function drawNote(note, currentFloor) {
     ctx.drawImage(end, -endWidth / 2, endScreenY + overlap - endHeight, endWidth, endHeight);
     ctx.restore();
   }
+}
+
+function tintHitEffectAtlas(color) {
+  let atlas = document.createElement("canvas");
+  atlas.width = hitEffectImage.naturalWidth;
+  atlas.height = hitEffectImage.naturalHeight;
+  let atlasCtx = atlas.getContext("2d");
+  atlasCtx.drawImage(hitEffectImage, 0, 0);
+  let pixels = atlasCtx.getImageData(0, 0, atlas.width, atlas.height);
+  for (let i = 0; i < pixels.data.length; i += 4) {
+    for (let c = 0; c < 4; c++) pixels.data[i + c] *= color[c];
+  }
+  atlasCtx.putImageData(pixels, 0, 0);
+  return atlas;
+}
+
+function spawnHitEffect(note, result) {
+  let state = lineStates[Math.floor(note.judgeLineIndex / 2)];
+  if (!state) return;
+  let angle = state.angle * Math.PI / 180;
+  let headY = 0;
+  if (note.type == 3 && level.nowTime < note.realTime) {
+    headY = (note.floorPosition - state.currentFloor) * settings.speed;
+    if (note.side == 1) headY = -headY;
+  }
+  hitEffects.push({
+    x: state.x + note.positionX * Math.cos(angle) - headY * Math.sin(angle),
+    y: state.y + note.positionX * Math.sin(angle) + headY * Math.cos(angle),
+    result,
+    age: 0,
+    scale: settings.noteScale * Math.min(1, effectiveAspect / (16 / 9)) * 1.35,
+    particles: []
+  });
+}
+
+function hermite(t, start, startSlope, end, endSlope) {
+  let a = 2 * start - 2 * end + startSlope + endSlope;
+  let b = -3 * start + 3 * end - 2 * startSlope - endSlope;
+  return ((a * t + b) * t + startSlope) * t + start;
+}
+
+function updateHitParticle(particle, deltaTime) {
+  let u = particle.age / 0.5;
+  let drag = 5 * hermite(u, 0, 2.2, 1, 0);
+  particle.speed *= Math.max(0, 1 - drag * particle.speed * deltaTime);
+  particle.distance += particle.speed * deltaTime;
+  particle.age += deltaTime;
+}
+
+function updateHitEffects(deltaTime) {
+  if (deltaTime <= 0) return;
+  let steps = Math.ceil(deltaTime / 0.03);
+  let stepTime = deltaTime / steps;
+  for (let effect of hitEffects) {
+    if (effect.age + deltaTime >= 0.56) {
+      effect.age += deltaTime;
+      effect.particles = [];
+      continue;
+    }
+    for (let step = 0; step < steps; step++) {
+      let endAge = effect.age + stepTime;
+      for (let particle of effect.particles) updateHitParticle(particle, stepTime);
+      effect.particles = effect.particles.filter((particle) => particle.age < 0.5);
+      if (endAge < 0.05999999865889549) {
+        let first = Math.floor(effect.age * 100 + 1e-9);
+        let last = Math.floor(endAge * 100 + 1e-9);
+        let count = Math.min(last - first, hitEffectStyles[effect.result].count - effect.particles.length);
+        for (let i = 0; i < count; i++) {
+          let particle = {
+            angle: Math.random() * Math.PI * 2,
+            speed: 15 + Math.random() * 20,
+            distance: Math.sqrt(0.16 ** 2 + Math.random() * (0.2 ** 2 - 0.16 ** 2)),
+            age: 0
+          };
+          updateHitParticle(particle, Math.max(0, endAge - (last - i) / 100));
+          effect.particles.push(particle);
+        }
+      }
+      effect.age = endAge;
+    }
+  }
+  hitEffects = hitEffects.filter((effect) => effect.age < 0.5 || effect.particles.length > 0);
+}
+
+function drawHitEffects() {
+  ctx.save();
+  for (let effect of hitEffects) {
+    let x = worldToScreenX(effect.x);
+    let y = worldToScreenY(effect.y);
+    let scale = effect.scale * screenHeight / 10;
+    let frame = Math.min(29, Math.floor(effect.age * 60));
+    let atlas = hitEffectAtlases[effect.result];
+    ctx.globalAlpha = 1;
+    if (atlas && effect.age < 0.5) {
+      let size = 2.56 * scale;
+      ctx.drawImage(atlas, frame % 6 * 256, Math.floor(frame / 6) * 256, 256, 256,
+        x - size / 2, y - size / 2, size, size);
+    }
+
+    ctx.fillStyle = hitEffectStyles[effect.result].particleColor;
+    for (let particle of effect.particles) {
+      let u = particle.age / 0.5;
+      let size = 0.3 * hermite(u,
+        0.498844922, 1.639878511,
+        0.694114327, -1.041509628) * scale;
+      let distance = particle.distance * scale;
+      ctx.globalAlpha = Math.max(0, 1 - u);
+      let particleX = x + distance * Math.cos(particle.angle);
+      let particleY = y - distance * Math.sin(particle.angle);
+      ctx.fillRect(particleX - size / 2, particleY - size / 2, size, size);
+    }
+  }
+  ctx.restore();
 }
 
 function drawNotes(notes, currentFloor, type) {
@@ -809,6 +939,7 @@ function drawFrame() {
   drawBackground();
 
   drawJudgeLines();
+  drawHitEffects();
   if (sideMaskWidth > 0) {
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, sideMaskWidth, screenHeight);
@@ -1261,6 +1392,7 @@ function gameLoop(now) {
     updateLevelTime();
     updateJudgeLineStates();
     if (level.audioStarted) {
+      updateHitEffects(deltaTime);
       updateFingers(deltaTime);
       updateNoteControls();
     } else {
@@ -1290,6 +1422,7 @@ zipInput.addEventListener("change", async () => {
     paused = true;
     pauseTime = 0;
     clearFingers();
+    hitEffects = [];
     level.info = {};
     level.chart = null;
     level.nowTime = -3;
