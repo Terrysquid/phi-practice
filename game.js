@@ -1197,6 +1197,9 @@ function finishFingerFrame() {
 }
 
 function pauseLevel() {
+  if (paused) return;
+  paused = true;
+  pauseTime = 0;
   stopMusic();
   clearFingers();
   playPauseSound();
@@ -1232,9 +1235,7 @@ function handlePausePointer(event) {
   if (paused || !isInsidePauseHitbox(event.clientX, event.clientY)) return;
   event.preventDefault();
   if (pauseTime > 0) {
-    pauseTime = 0;
     pauseLevel();
-    paused = true;
     return;
   }
   pauseTime = 1.2;
@@ -1408,6 +1409,11 @@ function gameLoop(now) {
 
 window.addEventListener("resize", resizeCanvas);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resizeCanvas);
+window.addEventListener("blur", pauseLevel);
+window.addEventListener("pagehide", pauseLevel);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) pauseLevel();
+});
 canvas.addEventListener("pointerdown", handlePointerDown);
 canvas.addEventListener("pointermove", handlePointerMove);
 canvas.addEventListener("pointerup", handlePointerUp);
