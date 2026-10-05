@@ -915,10 +915,12 @@ function drawSongsLevel(songsLevel) {
 
 function resizeCanvas() {
   let viewport = window.visualViewport;
+  let standalone = navigator.standalone || window.matchMedia("(display-mode: standalone)").matches;
+  document.documentElement.classList.toggle("standalone", standalone);
   let viewportWidth = viewport ? viewport.width : window.innerWidth;
   let viewportHeight = viewport ? viewport.height : window.innerHeight;
-  canvas.style.width = `${viewportWidth}px`;
-  canvas.style.height = `${viewportHeight}px`;
+  canvas.style.width = standalone ? "100vw" : `${viewportWidth}px`;
+  canvas.style.height = standalone ? "100vh" : `${viewportHeight}px`;
   let rect = canvas.getBoundingClientRect();
   deviceScale = Math.max(1, window.devicePixelRatio || 1);
   screenWidth = Math.max(1, rect.width);

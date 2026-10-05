@@ -22,6 +22,11 @@ body {
   color: #fff;
   overscroll-behavior: none;
 }
+html.standalone,
+html.standalone body {
+  width: 100vw;
+  height: 100vh;
+}
 #canvas {
   position: fixed;
   left: 0;
