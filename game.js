@@ -1,5 +1,7 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const blockCanvas = document.createElement("canvas");
+const blockCtx = blockCanvas.getContext("2d");
 const pauseIcon = new Image();
 pauseIcon.src = "assets/Pause.png";
 const noteRing = new Image();
@@ -101,12 +103,15 @@ let lastFrameTime = performance.now();
 let perfectTimeRange = 0.08;
 let goodTimeRange = 0.18;
 let badTimeRange = 0.22;
+let blockTouchInsetScreenHeightRatio = 0.03;
+let maxBlockTouchInsetLocal = 0.25;
 let chartNoteSortByTime = [];
 let noteControls = [];
 let hitEffects = [];
 let lineStates = [];
 let fingers = [];
 let fingerById = new Map();
+let blockedFingerIds = new Set();
 let pendingFingerEvents = [];
 
 class ScoreControl {
@@ -782,6 +787,126 @@ function drawJudgeLines() {
   }
 }
 
+function getBlockEase(t, easeType) {
+  t = Math.max(0, Math.min(1, t));
+  if (easeType == 0) return t;
+  if (easeType == 13) return 0;
+  if (easeType == 14) return 1;
+  let power = 2 + Math.floor((easeType - 1) / 3);
+  let mode = (easeType - 1) % 3;
+  let sample = (u) => {
+    if (mode == 0) return u ** power;
+    if (mode == 1) return 1 - (1 - u) ** power;
+    return u < 0.5 ? (2 * u) ** power / 2 : 1 - (2 - 2 * u) ** power / 2;
+  };
+  let lower = Math.floor(t * 100);
+  return lerp(sample(lower / 100), sample(Math.min(100, lower + 1) / 100), t * 100 - lower);
+}
+
+function getBlockGeometry(block, nowTime) {
+  let worldWidth = 10 * effectiveAspect;
+  let left = block.bottomLeftPercentage;
+  let right = block.topRightPercentage;
+  let baseX = ((left.x + right.x) / 2 - 0.5) * worldWidth;
+  let baseY = ((left.y + right.y) / 2 - 0.5) * 10;
+  let x = baseX;
+  let y = baseY;
+  let scaleX = 1;
+  let scaleY = 1;
+  let angle = 0;
+
+  let scaleEvents = block.scaleEvents || [];
+  for (let i = 0; i < scaleEvents.length; i++) {
+    let event = scaleEvents[i];
+    if (event.time > nowTime) break;
+    scaleX = event.scale.x;
+    scaleY = event.scale.y;
+    let next = scaleEvents[i + 1];
+    if (!next) break;
+    let t = nowTime >= next.time ? 1 : inverseLerp(event.time, next.time, nowTime);
+    scaleX = lerp(scaleX, next.scale.x, t == 1 ? 1 : getBlockEase(t, event.easeTypeX));
+    scaleY = lerp(scaleY, next.scale.y, t == 1 ? 1 : getBlockEase(t, event.easeTypeY));
+    let anchorX = (event.anchor.x - 0.5) * worldWidth;
+    let anchorY = (event.anchor.y - 0.5) * 10;
+    x = anchorX + (x - anchorX) * (event.scale.x == 0 ? 1 : scaleX / event.scale.x);
+    y = anchorY + (y - anchorY) * (event.scale.y == 0 ? 1 : scaleY / event.scale.y);
+  }
+
+  let rotateEvents = block.rotateEvents || [];
+  for (let i = 0; i < rotateEvents.length; i++) {
+    let event = rotateEvents[i];
+    if (event.time > nowTime) break;
+    angle = event.rotation;
+    let next = rotateEvents[i + 1];
+    if (!next) break;
+    let t = nowTime >= next.time ? 1 : inverseLerp(event.time, next.time, nowTime);
+    angle = lerp(angle, next.rotation, t == 1 ? 1 : getBlockEase(t, event.easeType));
+    let radians = (angle - event.rotation) * Math.PI / 180;
+    let anchorX = (event.anchor.x - 0.5) * worldWidth;
+    let anchorY = (event.anchor.y - 0.5) * 10;
+    let dx = x - anchorX;
+    let dy = y - anchorY;
+    x = anchorX + dx * Math.cos(radians) - dy * Math.sin(radians);
+    y = anchorY + dx * Math.sin(radians) + dy * Math.cos(radians);
+  }
+
+  let moveEvents = block.moveEvents || [];
+  for (let i = moveEvents.length - 1; i >= 0; i--) {
+    let event = moveEvents[i];
+    if (event.time > nowTime) continue;
+    let moveX = event.endPosition.x;
+    let moveY = event.endPosition.y;
+    let next = moveEvents[i + 1];
+    if (next) {
+      let t = inverseLerp(event.time, next.time, nowTime);
+      moveX = lerp(moveX, next.endPosition.x, getBlockEase(t, event.easeTypeX));
+      moveY = lerp(moveY, next.endPosition.y, getBlockEase(t, event.easeTypeY));
+    }
+    x += (moveX - 0.5) * worldWidth - baseX;
+    y += (moveY - 0.5) * 10 - baseY;
+    break;
+  }
+
+  return {
+    x, y, angle,
+    width: Math.abs((right.x - left.x) * worldWidth * scaleX),
+    height: Math.abs((right.y - left.y) * 10 * scaleY)
+  };
+}
+
+function drawBlocks() {
+  let blocks = level.chart?.blockAreaList;
+  if (!blocks?.length) return;
+  if (blockCanvas.width != canvas.width || blockCanvas.height != canvas.height) {
+    blockCanvas.width = canvas.width;
+    blockCanvas.height = canvas.height;
+  }
+  blockCtx.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
+  blockCtx.clearRect(0, 0, screenWidth, screenHeight);
+  blockCtx.fillStyle = "#ff3030";
+  // normal regions form a union; subtract regions use XOR
+  for (let isSubtract of [false, true]) {
+    blockCtx.globalCompositeOperation = isSubtract ? "xor" : "source-over";
+    for (let block of blocks) {
+      if (!!block.isSubtract != isSubtract) continue;
+      if (level.nowTime < block.appearTime || level.nowTime >= block.disappearTime) continue;
+      if (level.nowTime < block.enableTime || level.nowTime >= block.disableTime) continue;
+      let geometry = getBlockGeometry(block, level.nowTime);
+      blockCtx.save();
+      blockCtx.translate(worldToScreenX(geometry.x), worldToScreenY(geometry.y));
+      blockCtx.rotate(-geometry.angle * Math.PI / 180);
+      let width = geometry.width * screenHeight / 10;
+      let height = geometry.height * screenHeight / 10;
+      blockCtx.fillRect(-width / 2, -height / 2, width, height);
+      blockCtx.restore();
+    }
+  }
+  ctx.save();
+  ctx.globalAlpha = 0.3;
+  ctx.drawImage(blockCanvas, 0, 0, screenWidth, screenHeight);
+  ctx.restore();
+}
+
 function fingerOnLine(finger, state) {
   let dx = finger.nowPosition.x - state.x;
   let dy = finger.nowPosition.y - state.y;
@@ -939,6 +1064,7 @@ function drawFrame() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, screenWidth, screenHeight);
   drawBackground();
+  drawBlocks();
 
   drawJudgeLines();
   drawHitEffects();
@@ -977,19 +1103,36 @@ function isInsidePauseMenuHitbox(screenX, screenY, worldX) {
   return Math.hypot(screenX - x, screenY - y) <= r;
 }
 
-function clearFingers() {
+function clearFingers(preserveBlocked = false) {
   fingers = [];
-  fingerById.clear();
+  if (preserveBlocked) {
+    for (let event of pendingFingerEvents) {
+      if (event.phase != "moved") blockedFingerIds.delete(event.fingerId);
+    }
+    for (let fingerId of fingerById.keys()) {
+      if (!fingerById.get(fingerId).pressed) blockedFingerIds.delete(fingerId);
+      if (!blockedFingerIds.has(fingerId)) fingerById.delete(fingerId);
+    }
+  } else {
+    fingerById.clear();
+    blockedFingerIds.clear();
+  }
   pendingFingerEvents = [];
 }
 
 function queueFingerEvent(fingerId, phase, clientX, clientY) {
-  if (paused) return;
+  if (paused) {
+    if (phase == "ended" || phase == "canceled") {
+      fingerById.delete(fingerId);
+      blockedFingerIds.delete(fingerId);
+    }
+    return;
+  }
   pendingFingerEvents.push({ fingerId, phase, clientX, clientY });
 }
 
 function syncFingers() {
-  for (let finger of fingers) {
+  for (let finger of fingerById.values()) {
     finger.isNewClick = false;
     finger.lastPosition = finger.nowPosition;
     finger.lastMove = finger.nowMove;
@@ -1001,6 +1144,12 @@ function syncFingers() {
       y: screenToWorldY(event.clientY)
     };
     let finger = fingerById.get(event.fingerId);
+    if (event.phase == "began") {
+      blockedFingerIds.delete(event.fingerId);
+      let index = fingers.indexOf(finger);
+      if (index >= 0) fingers.splice(index, 1);
+      finger = null;
+    }
     if (!finger) {
       finger = {
         fingerId: event.fingerId,
@@ -1013,7 +1162,7 @@ function syncFingers() {
         lastMove: { x: 0, y: 0 },
         nowMove: { x: 0, y: 0 }
       };
-      fingers.push(finger);
+      if (!blockedFingerIds.has(event.fingerId)) fingers.push(finger);
       fingerById.set(event.fingerId, finger);
       continue;
     }
@@ -1024,6 +1173,11 @@ function syncFingers() {
     };
     finger.pressed = event.phase != "ended" && event.phase != "canceled";
     if (event.phase == "began") finger.isNewClick = true;
+    if (event.phase == "canceled") {
+      finger.isNewClick = false;
+      finger.isNewFlick = false;
+      finger.nowMove = { x: 0, y: 0 };
+    }
   }
   pendingFingerEvents = [];
 }
@@ -1169,6 +1323,76 @@ function CheckFlick(finger) {
   finger.isNewFlick = false;
 }
 
+function TryGetBlockTouchHalfSize(block) {
+  if (block.width < 0.0001 || block.height < 0.0001) return null;
+  let inset = blockTouchInsetScreenHeightRatio * 10;
+  let direction = block.isSubtract ? 1 : -1;
+  return {
+    x: 0.5 + direction * Math.min(inset / block.width, maxBlockTouchInsetLocal),
+    y: 0.5 + direction * Math.min(inset / block.height, maxBlockTouchInsetLocal)
+  };
+}
+
+function TryGetBlockingBlock(worldPosition, blocks) {
+  let originalNormal = false;
+  let originalSubtract = false;
+  let normalBlock = null;
+  let subtractBlock = null;
+  let adjustedSubtract = false;
+  for (let block of blocks) {
+    let halfSize = TryGetBlockTouchHalfSize(block);
+    if (!halfSize) continue;
+    let dx = worldPosition.x - block.x;
+    let dy = worldPosition.y - block.y;
+    let angle = block.angle * Math.PI / 180;
+    let x = Math.abs((dx * Math.cos(angle) + dy * Math.sin(angle)) / block.width);
+    let y = Math.abs((-dx * Math.sin(angle) + dy * Math.cos(angle)) / block.height);
+    if (x <= 0.5 && y <= 0.5) {
+      if (block.isSubtract) originalSubtract = !originalSubtract;
+      else originalNormal = true;
+    }
+    if (x <= halfSize.x && y <= halfSize.y) {
+      if (block.isSubtract) {
+        adjustedSubtract = !adjustedSubtract;
+        if (!subtractBlock) subtractBlock = block;
+      } else if (!normalBlock) {
+        normalBlock = block;
+      }
+    }
+  }
+  if (originalNormal == originalSubtract) return null;
+  if ((normalBlock != null) == adjustedSubtract) return null;
+  return normalBlock || subtractBlock;
+}
+
+function ProcessBlockedTouches() {
+  let blocks = level.chart?.blockAreaList;
+  if (!blocks?.length || !fingers.length) return;
+  let activeBlocks = [];
+  for (let block of blocks) {
+    if (level.nowTime < block.appearTime || level.nowTime >= block.disappearTime) continue;
+    if (level.nowTime < block.enableTime || level.nowTime >= block.disableTime) continue;
+    let geometry = getBlockGeometry(block, level.nowTime);
+    geometry.isSubtract = block.isSubtract;
+    activeBlocks.push(geometry);
+  }
+  for (let finger of fingers) {
+    if (blockedFingerIds.has(finger.fingerId)) continue;
+    // a browser can deliver a complete click between two animation frames
+    if (!finger.pressed && !finger.isNewClick) continue;
+    if (TryGetBlockingBlock(finger.nowPosition, activeBlocks)) {
+      blockedFingerIds.add(finger.fingerId);
+    }
+  }
+}
+
+function CheckBlocks() {
+  ProcessBlockedTouches();
+  for (let i = fingers.length - 1; i >= 0; i--) {
+    if (blockedFingerIds.has(fingers[i].fingerId)) fingers.splice(i, 1);
+  }
+}
+
 function updateNoteMatching() {
   for (let finger of fingers) {
     if (finger.isNewClick) CheckNote(finger);
@@ -1185,13 +1409,18 @@ function updateNoteControls() {
 function updateFingers(deltaTime) {
   syncFingers();
   updateFlickTrigger(deltaTime);
+  CheckBlocks();
   updateNoteMatching();
 }
 
 function finishFingerFrame() {
+  for (let [fingerId, finger] of fingerById) {
+    if (finger.pressed) continue;
+    blockedFingerIds.delete(fingerId);
+    fingerById.delete(fingerId);
+  }
   for (let i = fingers.length - 1; i >= 0; i--) {
     if (fingers[i].pressed) continue;
-    fingerById.delete(fingers[i].fingerId);
     fingers.splice(i, 1);
   }
 }
@@ -1201,7 +1430,7 @@ function pauseLevel() {
   paused = true;
   pauseTime = 0;
   stopMusic();
-  clearFingers();
+  clearFingers(true);
   playPauseSound();
 }
 
@@ -1218,7 +1447,7 @@ function resumeLevel() {
   level.startTime = -1;
   level.startDelay = 3.0;
   level.audioStarted = false;
-  clearFingers();
+  clearFingers(true);
 }
 
 function retryLevel() {
@@ -1274,17 +1503,20 @@ function handlePointerDown(event) {
 }
 function handlePointerMove(event) {
   if (event.pointerType == "touch") return;
-  if (!fingerById.has(`pointer:${event.pointerId}`)) return;
+  if (!fingerById.has(`pointer:${event.pointerId}`) &&
+      !pendingFingerEvents.some(finger => finger.fingerId == `pointer:${event.pointerId}`)) return;
   queueFingerEvent(`pointer:${event.pointerId}`, "moved", event.clientX, event.clientY);
 }
 function handlePointerUp(event) {
   if (event.pointerType == "touch") return;
-  if (!fingerById.has(`pointer:${event.pointerId}`)) return;
+  if (!fingerById.has(`pointer:${event.pointerId}`) &&
+      !pendingFingerEvents.some(finger => finger.fingerId == `pointer:${event.pointerId}`)) return;
   queueFingerEvent(`pointer:${event.pointerId}`, "ended", event.clientX, event.clientY);
 }
 function handlePointerCancel(event) {
   if (event.pointerType == "touch") return;
-  if (!fingerById.has(`pointer:${event.pointerId}`)) return;
+  if (!fingerById.has(`pointer:${event.pointerId}`) &&
+      !pendingFingerEvents.some(finger => finger.fingerId == `pointer:${event.pointerId}`)) return;
   queueFingerEvent(`pointer:${event.pointerId}`, "canceled", event.clientX, event.clientY);
 }
 
@@ -1317,7 +1549,6 @@ function handleTouchMove(event) {
   }
 }
 function handleTouchEnd(event) {
-  if (paused) return;
   event.preventDefault();
   for (let i = 0; i < event.changedTouches.length; i++) {
     let touch = event.changedTouches[i];
@@ -1325,7 +1556,6 @@ function handleTouchEnd(event) {
   }
 }
 function handleTouchCancel(event) {
-  if (paused) return;
   event.preventDefault();
   for (let i = 0; i < event.changedTouches.length; i++) {
     let touch = event.changedTouches[i];
@@ -1350,7 +1580,7 @@ function requestMusicPlayback() {
   source.buffer = level.music;
   source.connect(audioContext.destination);
   source.onended = () => source.disconnect();
-  // Buffer sources have no playback-position property; retain their clock anchor.
+  // remember the start time and offset to calculate the current song position
   level.musicStartTime = Math.max(audioContext.currentTime, level.startTime);
   level.musicOffset = level.audioTime;
   source.start(level.musicStartTime, level.musicOffset);
