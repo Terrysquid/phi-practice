@@ -88,6 +88,7 @@ let settings = {
   musicVol: 1.0, // 音乐音量
   SEVol: 1.0, // 界面音效音量
   HitFXVol: 1.0, // 打击音效音量
+  ApFcIsOn: true, // AP/FC 指示器
   isLowRes: false, // 低分辨率模式
 };
 
@@ -746,6 +747,10 @@ function drawJudgeLine(x, y, angle, alpha) {
   ctx.translate(worldToScreenX(x), worldToScreenY(y));
   ctx.rotate(-angle * Math.PI / 180);
   ctx.fillStyle = "#fff";
+  if (settings.ApFcIsOn) {
+    if (level.nowTime < 0 || scoreControl.isAllPerfect) ctx.fillStyle = "#ffffb4";
+    else if (scoreControl.isFullCombo) ctx.fillStyle = "#b3ecff";
+  }
   ctx.fillRect(-length / 2, -thickness / 2, length, thickness);
   ctx.restore();
 }
