@@ -215,6 +215,11 @@ function readYaml(text) {
 
 async function loadZipContent(path, type) {
   let file = level.zip.file(path);
+  if (!file) {
+    let defaults = { json: "chart.json", audio: "music.wav", image: "illustration.jpg" };
+    let extensions = { json: /\.json$/i, audio: /\.(wav|mp3)$/i, image: /\.(png|jpe?g)$/i };
+    file = level.zip.file(defaults[type]) || level.zip.file(extensions[type])[0];
+  }
   if (!file) return null;
   if (type == "json") {
     let text = await file.async("string");
@@ -926,7 +931,7 @@ function fingerOnLine(finger, state) {
 
 function drawBackground() {
   // temporary
-  let image = level.illustrationBlur;
+  let image = level.illustrationBlur || level.illustration;
   if (!imageReady(image)) return;
   let height = screenHeight;
   let width = image.naturalWidth / image.naturalHeight * height;
@@ -1707,9 +1712,10 @@ zipInput.addEventListener("change", async () => {
         console.error("Could not decode music:", error);
         return null;
       });
-    level.illustration = await loadZipContent(level.info.illustration, "image");
+    // commenting out temporarily
+    // level.illustration = await loadZipContent(level.info.illustration, "image");
     level.illustrationBlur = await loadZipContent(level.info.illustrationBlur, "image");
-    level.illustrationLowRes = await loadZipContent(level.info.illustrationLowRes, "image");
+    // level.illustrationLowRes = await loadZipContent(level.info.illustrationLowRes, "image");
   }
 });
 resizeCanvas();
