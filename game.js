@@ -2,6 +2,7 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const blockCanvas = document.createElement("canvas");
 const blockCtx = blockCanvas.getContext("2d");
+const blockRender = new BlockRender();
 const pauseIcon = new Image();
 pauseIcon.src = "assets/Pause.png";
 const noteRing = new Image();
@@ -910,6 +911,7 @@ function drawBlocks() {
   ctx.globalAlpha = 0.3;
   ctx.drawImage(blockCanvas, 0, 0, screenWidth, screenHeight);
   ctx.restore();
+  blockRender.Draw(ctx, blockCanvas, screenWidth, screenHeight, deviceScale);
 }
 
 function fingerOnLine(finger, state) {
@@ -1121,6 +1123,7 @@ function clearFingers(preserveBlocked = false) {
   } else {
     fingerById.clear();
     blockedFingerIds.clear();
+    blockRender.Reset();
   }
   pendingFingerEvents = [];
 }
@@ -1637,6 +1640,7 @@ function gameLoop(now) {
       syncFingers();
     }
   }
+  blockRender.Update(deltaTime, fingerById, blockedFingerIds);
   drawFrame();
   finishFingerFrame();
   requestAnimationFrame(gameLoop);
