@@ -5,6 +5,8 @@ const blockCtx = blockCanvas.getContext("2d");
 const blockRender = new BlockRender();
 const pauseIcon = new Image();
 pauseIcon.src = "assets/Pause.png";
+const progressBar = new Image();
+progressBar.src = "assets/ProgressBar.png";
 const noteRing = new Image();
 noteRing.src = "assets/NoteRing.png";
 const audioContext = new AudioContext({ latencyHint: "interactive" });
@@ -942,6 +944,16 @@ function drawBackground() {
   ctx.fillRect(0, 0, screenWidth, screenHeight);
 }
 
+function drawProgressBar() {
+  if (!level.music || !imageReady(progressBar)) return;
+  let progress = level.nowTime / level.music.duration;
+  let x = uiToScreenX((progress * 2 - 1) * uiHalfWidth());
+  let y = uiToScreenY(500);
+  let width = progressBar.naturalWidth * screenHeight / 1000;
+  let height = progressBar.naturalHeight * screenHeight / 1000;
+  ctx.drawImage(progressBar, x - width, y, width, height);
+}
+
 function drawPauseRing() {
   if (pauseTime <= 0 || !imageReady(noteRing)) return;
   let x = uiToScreenX(-838.3 + 500 * 16 / 9 - uiHalfWidth() - 1.7);
@@ -1080,6 +1092,7 @@ function drawFrame() {
 
   drawJudgeLines();
   drawHitEffects();
+  drawProgressBar();
   if (sideMaskWidth > 0) {
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, sideMaskWidth, screenHeight);
