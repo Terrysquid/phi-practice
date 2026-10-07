@@ -305,6 +305,7 @@ class ClickControl {
 class HoldControl {
   constructor(note) {
     this.note = note;
+    this.timeOfJudge = 0;
     this.isJudged = false;
     this.missed = false;
     this.judged = false;
@@ -312,6 +313,19 @@ class HoldControl {
     this.isPerfect = false;
     this.judgeTime = 0;
     this.safeFrame = 2;
+  }
+
+  NoteMove() {
+    if (level.nowTime <= this.note.realTime) {
+      this.timeOfJudge = 0;
+      return;
+    }
+    if (level.nowTime >= this.note.realTime + this.note.holdTime) return;
+    let line = level.chart.judgeLineList[Math.floor(this.note.judgeLineIndex / 2)];
+    if (this.timeOfJudge >= 60 / line.bpm * 0.5 - 0.00001 && this.judged && !this.missed) {
+      spawnHitEffect(this.note, this.isPerfect ? "Perfect" : "Good");
+      this.timeOfJudge = 0;
+    }
   }
 
   Judge() {
@@ -325,7 +339,6 @@ class HoldControl {
           scoreControl.Miss(this.note);
           this.note.isJudged = true;
           this.missed = true;
-          return true;
         }
       } else {
         if (Math.abs(dt) < perfectTimeRange) {
@@ -341,7 +354,7 @@ class HoldControl {
       }
     }
 
-    if (this.judged && !this.judgeOver) {
+    if (this.judged && !this.missed && !this.judgeOver) {
       let isHolding = false;
       for (let finger of fingers) {
         if (!finger.pressed) continue;
@@ -360,17 +373,16 @@ class HoldControl {
         scoreControl.Miss(this.note);
         this.note.isJudged = true;
         this.missed = true;
-        return true;
+        this.judgeOver = true;
       } else {
         this.safeFrame--;
       }
 
-      if (tailTime - level.nowTime < badTimeRange) {
+      if (!this.judgeOver && tailTime - level.nowTime < 0.22) {
         if (this.isPerfect) scoreControl.Perfect(this.note, this.judgeTime, true);
         else scoreControl.Good(this.note, this.judgeTime, true);
         this.note.isJudged = true;
         this.judgeOver = true;
-        return true;
       }
     }
 
@@ -565,8 +577,8 @@ function getLineEvent(events, nowTime) {
 }
 
 function drawNote(note, currentFloor) {
-  if (note.judgeResult) return;
   if (note.type == 1 || note.type == 2 || note.type == 4) {
+    if (note.judgeResult) return;
     let image;
     if (note.type == 1) image = note.isHL ? tapNoteHL : tapNote;
     else if (note.type == 2) image = note.isHL ? dragNoteHL : dragNote;
@@ -619,6 +631,7 @@ function drawNote(note, currentFloor) {
     ctx.save();
     ctx.translate(note.positionX * screenHeight / 10, 0);
     if (note.side == 1) ctx.rotate(Math.PI);
+    if (note.control.missed) ctx.globalAlpha = 0.45;
     ctx.drawImage(body, -bodyWidth / 2, endScreenY, bodyWidth, bodyHeight);
     if (!started) {
       ctx.drawImage(head, -headWidth / 2, headScreenY, headWidth, headHeight);
@@ -1426,9 +1439,14 @@ function updateNoteMatching() {
   }
 }
 
-function updateNoteControls() {
+function updateNoteControls(deltaTime = 0) {
   for (let i = noteControls.length - 1; i >= 0; i--) {
-    if (noteControls[i].Judge()) noteControls.splice(i, 1);
+    let control = noteControls[i];
+    if (control.note.type == 3) {
+      control.timeOfJudge += deltaTime;
+      control.NoteMove();
+    }
+    if (control.Judge()) noteControls.splice(i, 1);
   }
 }
 
@@ -1653,7 +1671,7 @@ function gameLoop(now) {
     if (level.audioStarted) {
       updateHitEffects(deltaTime);
       updateFingers(deltaTime);
-      updateNoteControls();
+      updateNoteControls(deltaTime);
     } else {
       syncFingers();
     }
