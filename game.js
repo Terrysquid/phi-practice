@@ -110,7 +110,6 @@ let badTimeRange = 0.22;
 let blockTouchInsetScreenHeightRatio = 0.03;
 let maxBlockTouchInsetLocal = 0.25;
 let chartNoteSortByTime = [];
-let noteControls = [];
 let hitEffects = [];
 let lineStates = [];
 let fingers = [];
@@ -465,6 +464,43 @@ class FlickControl {
   }
 }
 
+class NoteUpdateManager {
+  constructor() {
+    this.clickControls = [];
+    this.dragControls = [];
+    this.holdControls = [];
+    this.flickControls = [];
+  }
+
+  Update(deltaTime = 0) {
+    for (let controls of [this.clickControls, this.dragControls, this.holdControls, this.flickControls]) {
+      for (let i = 0; i < controls.length; i++) {
+        let control = controls[i];
+        let note = control.note;
+        if (note.type == 3) {
+          let state = lineStates[Math.floor(note.judgeLineIndex / 2)];
+          let distance = note.floorPosition - state.currentFloor;
+          let tolerance = Math.max(note.floorPosition / 6000000, 0.001);
+          let isVisible = level.nowTime > note.realTime
+            ? level.nowTime < note.realTime + note.holdTime
+            : distance >= -tolerance && distance * settings.speed <= 20;
+          if (isVisible) {
+            control.timeOfJudge += deltaTime;
+            control.NoteMove();
+          }
+        }
+        if (note.realTime > level.nowTime + 2) continue;
+        if (control.Judge()) {
+          controls.splice(i, 1);
+          i--;
+        }
+      }
+    }
+  }
+}
+
+let noteUpdateManager = new NoteUpdateManager();
+
 function createNoteControl(note) {
   if (note.type == 1) return new ClickControl(note);
   if (note.type == 2) return new DragControl(note);
@@ -474,7 +510,7 @@ function createNoteControl(note) {
 }
 
 function resetNoteControls() {
-  noteControls = [];
+  noteUpdateManager = new NoteUpdateManager();
   hitEffects = [];
   scoreControl.reset(chartNoteSortByTime.length);
   for (let note of chartNoteSortByTime) {
@@ -483,7 +519,10 @@ function resetNoteControls() {
     note.judgeResult = null;
     note.judgeTime = null;
     note.control = createNoteControl(note);
-    if (note.control) noteControls.push(note.control);
+    if (note.type == 1) noteUpdateManager.clickControls.push(note.control);
+    else if (note.type == 2) noteUpdateManager.dragControls.push(note.control);
+    else if (note.type == 3) noteUpdateManager.holdControls.push(note.control);
+    else if (note.type == 4) noteUpdateManager.flickControls.push(note.control);
   }
 }
 
@@ -1439,17 +1478,6 @@ function updateNoteMatching() {
   }
 }
 
-function updateNoteControls(deltaTime = 0) {
-  for (let i = noteControls.length - 1; i >= 0; i--) {
-    let control = noteControls[i];
-    if (control.note.type == 3) {
-      control.timeOfJudge += deltaTime;
-      control.NoteMove();
-    }
-    if (control.Judge()) noteControls.splice(i, 1);
-  }
-}
-
 function updateFingers(deltaTime) {
   syncFingers();
   updateFlickTrigger(deltaTime);
@@ -1671,7 +1699,7 @@ function gameLoop(now) {
     if (level.audioStarted) {
       updateHitEffects(deltaTime);
       updateFingers(deltaTime);
-      updateNoteControls(deltaTime);
+      noteUpdateManager.Update(deltaTime);
     } else {
       syncFingers();
     }
