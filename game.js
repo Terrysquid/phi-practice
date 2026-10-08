@@ -273,7 +273,17 @@ function imageReady(image) {
 class ClickControl {
   constructor(note) {
     this.note = note;
+    this.isVisible = false;
+    this.y = 0;
+    this.alpha = 1;
     this.isJudged = false;
+  }
+
+  NoteMove() {
+    let state = lineStates[Math.floor(this.note.judgeLineIndex / 2)];
+    this.y = (this.note.floorPosition - state.currentFloor) * this.note.speed * settings.speed;
+    let late = Math.max(0, level.nowTime - this.note.realTime);
+    this.alpha = Math.max(0, 1 - late / (goodTimeRange - 0.02)); // goodTimeRange must be greater than 0.02
   }
 
   Judge() {
@@ -304,6 +314,11 @@ class ClickControl {
 class HoldControl {
   constructor(note) {
     this.note = note;
+    this.isVisible = false;
+    this.y = 0;
+    this.alpha = 1;
+    this.holdLength = 0;
+    this.started = false;
     this.timeOfJudge = 0;
     this.isJudged = false;
     this.missed = false;
@@ -315,13 +330,21 @@ class HoldControl {
   }
 
   NoteMove() {
-    if (level.nowTime <= this.note.realTime) {
+    let state = lineStates[Math.floor(this.note.judgeLineIndex / 2)];
+    let distance = this.note.floorPosition - state.currentFloor;
+    this.started = level.nowTime > this.note.realTime;
+    if (this.started) this.y = 0;
+    else if (distance > -0.001) this.y = distance * settings.speed;
+    let remaining = this.started ? this.note.realTime + this.note.holdTime - level.nowTime : this.note.holdTime;
+    this.holdLength = Math.max(0, remaining * this.note.speed * settings.speed);
+    this.alpha = this.missed ? 0.45 : 1;
+    if (!this.started) {
       this.timeOfJudge = 0;
       return;
     }
     if (level.nowTime >= this.note.realTime + this.note.holdTime) return;
     let line = level.chart.judgeLineList[Math.floor(this.note.judgeLineIndex / 2)];
-    if (this.timeOfJudge >= 60 / line.bpm * 0.5 - 0.00001 && this.judged && !this.missed) {
+    if (!paused && level.audioStarted && this.timeOfJudge >= 60 / line.bpm * 0.5 - 0.00001 && this.judged && !this.missed) {
       spawnHitEffect(this.note, this.isPerfect ? "Perfect" : "Good");
       this.timeOfJudge = 0;
     }
@@ -399,7 +422,17 @@ class HoldControl {
 class DragControl {
   constructor(note) {
     this.note = note;
+    this.isVisible = false;
+    this.y = 0;
+    this.alpha = 1;
     this.isJudged = false;
+  }
+
+  NoteMove() {
+    let state = lineStates[Math.floor(this.note.judgeLineIndex / 2)];
+    this.y = (this.note.floorPosition - state.currentFloor) * this.note.speed * settings.speed;
+    let late = Math.max(0, level.nowTime - this.note.realTime);
+    this.alpha = Math.max(0, 1 - late / 0.1);
   }
 
   Judge() {
@@ -440,6 +473,16 @@ class DragControl {
 class FlickControl {
   constructor(note) {
     this.note = note;
+    this.isVisible = false;
+    this.y = 0;
+    this.alpha = 1;
+  }
+
+  NoteMove() {
+    let state = lineStates[Math.floor(this.note.judgeLineIndex / 2)];
+    this.y = (this.note.floorPosition - state.currentFloor) * this.note.speed * settings.speed;
+    let late = Math.max(0, level.nowTime - this.note.realTime);
+    this.alpha = Math.max(0, 1 - late / 0.18);
   }
 
   Judge() {
@@ -473,24 +516,29 @@ class NoteUpdateManager {
   }
 
   Update(deltaTime = 0) {
+    if (!level.chart) return;
+    let playing = !paused && level.audioStarted;
+    // calculate note positions even when paused
     for (let controls of [this.clickControls, this.dragControls, this.holdControls, this.flickControls]) {
       for (let i = 0; i < controls.length; i++) {
         let control = controls[i];
         let note = control.note;
-        if (note.type == 3) {
-          let state = lineStates[Math.floor(note.judgeLineIndex / 2)];
-          let distance = note.floorPosition - state.currentFloor;
-          let tolerance = Math.max(note.floorPosition / 6000000, 0.001);
-          let isVisible = level.nowTime > note.realTime
-            ? level.nowTime < note.realTime + note.holdTime
-            : distance >= -tolerance && distance * settings.speed <= 20;
-          if (isVisible) {
-            control.timeOfJudge += deltaTime;
-            control.NoteMove();
-          }
+        let state = lineStates[Math.floor(note.judgeLineIndex / 2)];
+        let distance = note.floorPosition - state.currentFloor;
+        let tolerance = Math.max(note.floorPosition / 6000000, 0.001);
+        let speed = note.type == 3 ? 1 : note.speed;
+        // hide if too far away or below line when note in future, or hold tail has finished
+        // fading is defined by alpha in NoteControl
+        control.isVisible = level.nowTime > note.realTime
+          ? note.type != 3 || level.nowTime < note.realTime + note.holdTime
+          : distance >= -tolerance && distance * speed * settings.speed <= 20;
+        if (control.isVisible) {
+          if (note.type == 3 && playing) control.timeOfJudge += deltaTime;
+          control.NoteMove();
         }
-        if (note.realTime > level.nowTime + 2) continue;
+        if (!playing || note.realTime > level.nowTime + 2) continue;
         if (control.Judge()) {
+          control.isVisible = false;
           controls.splice(i, 1);
           i--;
         }
@@ -615,25 +663,23 @@ function getLineEvent(events, nowTime) {
   return activeEvent;
 }
 
-function drawNote(note, currentFloor) {
+function drawNote(note) {
+  let control = note.control;
+  if (!control.isVisible) return;
   if (note.type == 1 || note.type == 2 || note.type == 4) {
-    if (note.judgeResult) return;
     let image;
     if (note.type == 1) image = note.isHL ? tapNoteHL : tapNote;
     else if (note.type == 2) image = note.isHL ? dragNoteHL : dragNote;
     else if (note.type == 4) image = note.isHL ? flickNoteHL : flickNote;
     if (!imageReady(image)) return;
-    let distance = note.floorPosition - currentFloor;
-    let headY = distance * note.speed * settings.speed; // to differ from dy for holds
-    let tolerance = Math.max(note.floorPosition / 6000000, 0.001);
-    if (level.nowTime <= note.realTime && (distance < -tolerance || headY > 20)) return;
     let scale = visibleWidth / 8000 * settings.noteScale;
     let width = image.naturalWidth * scale;
     let height = image.naturalHeight * scale;
     ctx.save();
     ctx.translate(note.positionX * screenHeight / 10, 0);
     if (note.side == 1) ctx.rotate(Math.PI);
-    ctx.translate(0, -headY * screenHeight / 10);
+    ctx.translate(0, -control.y * screenHeight / 10);
+    ctx.globalAlpha = control.alpha;
     ctx.drawImage(image, -width / 2, -height / 2, width, height);
     ctx.restore();
   }
@@ -642,22 +688,12 @@ function drawNote(note, currentFloor) {
     let head = note.isHL ? holdHLHead : holdHead;
     let end = holdEnd;
     if (!imageReady(body) || !imageReady(head) || !imageReady(end)) return;
-    if (level.nowTime > note.realTime + note.holdTime) return;
-    let distance = note.floorPosition - currentFloor;
-    let headY = distance * settings.speed;
-    let tolerance = Math.max(note.floorPosition / 6000000, 0.001);
-    if (level.nowTime <= note.realTime && (distance < -tolerance || headY > 20)) return;
-    let started = level.nowTime >= note.realTime;
-    if (started) headY = 0;
-    let remaining = started ? note.realTime + note.holdTime - level.nowTime : note.holdTime;
-    let dy = remaining * note.speed * settings.speed;
-    if (dy <= 0) return;
-    let endY = headY + dy;
+    if (control.holdLength <= 0) return;
     let scale = visibleWidth / 8000 * settings.noteScale;
     let bodyScale = body == holdHLBody ? 1089 / 1062 : 1;
     let headScale = head == holdHLHead ? 1089 / 1062 : 1;
     let bodyWidth = body.naturalWidth * bodyScale * scale;
-    let bodyHeight = dy * screenHeight / 10;
+    let bodyHeight = control.holdLength * screenHeight / 10;
     let headWidth = head.naturalWidth * headScale * scale;
     let headHeight = head.naturalHeight * headScale * scale;
     let endWidth = end.naturalWidth * scale;
@@ -665,14 +701,14 @@ function drawNote(note, currentFloor) {
     // end is slightly overlapping body
     let bodyWorldHeight = body == holdHLBody ? (2048 * 19 / 21) / (100 * 1062 / 1089) : 19;
     let overlap = bodyHeight * (bodyWorldHeight - 18.99) / bodyWorldHeight;
-    let headScreenY = -headY * screenHeight / 10;
-    let endScreenY = -endY * screenHeight / 10;
+    let headScreenY = -control.y * screenHeight / 10;
+    let endScreenY = -(control.y + control.holdLength) * screenHeight / 10;
     ctx.save();
     ctx.translate(note.positionX * screenHeight / 10, 0);
     if (note.side == 1) ctx.rotate(Math.PI);
-    if (note.control.missed) ctx.globalAlpha = 0.45;
+    ctx.globalAlpha = control.alpha;
     ctx.drawImage(body, -bodyWidth / 2, endScreenY, bodyWidth, bodyHeight);
-    if (!started) {
+    if (!control.started) {
       ctx.drawImage(head, -headWidth / 2, headScreenY, headWidth, headHeight);
     }
     ctx.drawImage(end, -endWidth / 2, endScreenY + overlap - endHeight, endWidth, endHeight);
@@ -698,14 +734,11 @@ function spawnHitEffect(note, result) {
   let state = lineStates[Math.floor(note.judgeLineIndex / 2)];
   if (!state) return;
   let angle = state.angle * Math.PI / 180;
-  let headY = 0;
-  if (note.type == 3 && level.nowTime < note.realTime) {
-    headY = (note.floorPosition - state.currentFloor) * settings.speed;
-    if (note.side == 1) headY = -headY;
-  }
+  let y = note.type == 3 ? note.control.y : 0;
+  if (note.side == 1) y = -y;
   hitEffects.push({
-    x: state.x + note.positionX * Math.cos(angle) - headY * Math.sin(angle),
-    y: state.y + note.positionX * Math.sin(angle) + headY * Math.cos(angle),
+    x: state.x + note.positionX * Math.cos(angle) - y * Math.sin(angle),
+    y: state.y + note.positionX * Math.sin(angle) + y * Math.cos(angle),
     result,
     age: 0,
     scale: settings.noteScale * Math.min(1, effectiveAspect / (16 / 9)) * 1.35,
@@ -793,9 +826,9 @@ function drawHitEffects() {
   ctx.restore();
 }
 
-function drawNotes(notes, currentFloor, type) {
+function drawNotes(notes, type) {
   for (let note of notes) {
-    if (note.type == type) drawNote(note, currentFloor);
+    if (note.type == type) drawNote(note);
   }
 }
 
@@ -845,8 +878,8 @@ function drawJudgeLines() {
       ctx.save();
       ctx.translate(worldToScreenX(state.x), worldToScreenY(state.y));
       ctx.rotate(-state.angle * Math.PI / 180);
-      drawNotes(state.line.notesAbove, state.currentFloor, type);
-      drawNotes(state.line.notesBelow, state.currentFloor, type);
+      drawNotes(state.line.notesAbove, type);
+      drawNotes(state.line.notesBelow, type);
       ctx.restore();
     }
   }
@@ -1695,15 +1728,17 @@ function gameLoop(now) {
   if (!paused) {
     updatePauseTimer(deltaTime);
     updateLevelTime();
-    updateJudgeLineStates();
+  }
+  updateJudgeLineStates();
+  if (!paused) {
     if (level.audioStarted) {
       updateHitEffects(deltaTime);
       updateFingers(deltaTime);
-      noteUpdateManager.Update(deltaTime);
     } else {
       syncFingers();
     }
   }
+  noteUpdateManager.Update(deltaTime);
   blockRender.Update(deltaTime, fingerById, blockedFingerIds);
   drawFrame();
   finishFingerFrame();
