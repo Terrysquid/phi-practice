@@ -982,6 +982,7 @@ function drawBlocks() {
   blockCtx.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
   blockCtx.clearRect(0, 0, screenWidth, screenHeight);
   blockCtx.fillStyle = "#ff3030";
+  let geometries = [];
   // normal regions form a union; subtract regions use XOR
   for (let isSubtract of [false, true]) {
     blockCtx.globalCompositeOperation = isSubtract ? "xor" : "source-over";
@@ -990,6 +991,8 @@ function drawBlocks() {
       if (level.nowTime < block.appearTime || level.nowTime >= block.disappearTime) continue;
       if (level.nowTime < block.enableTime || level.nowTime >= block.disableTime) continue;
       let geometry = getBlockGeometry(block, level.nowTime);
+      geometry.isSubtract = isSubtract;
+      geometries.push(geometry);
       blockCtx.save();
       blockCtx.translate(worldToScreenX(geometry.x), worldToScreenY(geometry.y));
       blockCtx.rotate(-geometry.angle * Math.PI / 180);
@@ -1003,7 +1006,7 @@ function drawBlocks() {
   ctx.globalAlpha = 0.3;
   ctx.drawImage(blockCanvas, 0, 0, screenWidth, screenHeight);
   ctx.restore();
-  blockRender.Draw(ctx, blockCanvas, screenWidth, screenHeight, deviceScale);
+  blockRender.Draw(ctx, screenWidth, screenHeight, deviceScale, geometries);
 }
 
 function fingerOnLine(finger, state) {
@@ -1592,7 +1595,6 @@ function handlePauseMenuPointer(event) {
 }
 
 function handlePointer(event) {
-  unlockAudio();
   if (paused) {
     handlePauseMenuPointer(event);
     return;
@@ -1601,6 +1603,7 @@ function handlePointer(event) {
 }
 function handlePointerDown(event) {
   if (event.pointerType == "touch") return;
+  unlockAudio();
   handlePointer(event);
   if (event.defaultPrevented) return;
   if (event.target.setPointerCapture) event.target.setPointerCapture(event.pointerId);
@@ -1626,6 +1629,7 @@ function handlePointerCancel(event) {
 }
 
 function handleTouchStart(event) {
+  unlockAudio();
   let wasPaused = paused;
   let queued = false;
   for (let i = 0; i < event.changedTouches.length; i++) {
@@ -1807,6 +1811,10 @@ zipInput.addEventListener("change", async () => {
     level.info.previewEnd = Number(level.info.previewEnd || level.info.previewStart + 15.0);
     level.chart = await loadZipContent(level.info.chart, "json");
     prepareChart(level.chart);
+    if (level.chart.blockAreaList?.length) {
+      await blockRender.loading;
+      blockRender.WarmUp(screenWidth, screenHeight, deviceScale);
+    }
     level.music = await loadZipContent(level.info.music, "audio")
       .catch((error) => {
         console.error("Could not decode music:", error);

@@ -78,5 +78,5 @@ void main() {
     color = vec4(0.0, 0.0, 0.0, 1.0);
     if (abs(uv.x - 0.5) > _ScreenParams.y * (8.0 / 9.0) / _ScreenParams.x) return;
     vec4 region = texture(_ComposeRT, uv);
-    color.rgb = touchEffect() + region.rgb * region.a * 0.3 * touchBrightness();
+    color.rgb = touchEffect() + region.rgb * 0.3 * touchBrightness();
 }
