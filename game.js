@@ -1540,7 +1540,7 @@ function pauseLevel() {
 }
 
 function playPauseSound() {
-  if (!pauseAudioBuffer) return;
+  if (!pauseAudioBuffer || document.hidden || audioContext.state != "running") return;
   let source = audioContext.createBufferSource();
   source.buffer = pauseAudioBuffer;
   source.connect(audioContext.destination);
@@ -1674,9 +1674,13 @@ function updatePauseTimer(deltaTime) {
 }
 
 function unlockAudio() {
-  if (audioContext.state != "running") {
-    audioContext.resume().catch((error) => console.error("Could not resume audio:", error));
-  }
+  if (document.hidden) return;
+  audioContext.resume().catch(() => {});
+}
+
+function suspendAudio() {
+  pauseLevel();
+  audioContext.suspend().catch(() => {});
 }
 
 function requestMusicPlayback() {
@@ -1710,11 +1714,14 @@ function stopMusic() {
 
 function updateLevelTime() {
   if (!level.chart || !level.music) return;
+  if (audioContext.state != "running") {
+    level.audioStarted = false;
+    return;
+  }
   let time = audioContext.currentTime;
   if (level.startTime < 0) level.startTime = time + level.startDelay;
   if (!level.musicSource && time >= level.startTime - 1.0) requestMusicPlayback();
-  level.audioStarted = !!level.musicSource && audioContext.state == "running" &&
-    time >= level.musicStartTime;
+  level.audioStarted = !!level.musicSource && time >= level.musicStartTime;
   if (level.audioStarted) {
     level.audioTime = getMusicTime();
     level.nowTime = level.audioTime - (level.chart.offset + settings.offset);
@@ -1748,10 +1755,9 @@ function gameLoop(now) {
 window.addEventListener("resize", resizeCanvas);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resizeCanvas);
 window.addEventListener("blur", pauseLevel);
-window.addEventListener("pagehide", pauseLevel);
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) pauseLevel();
-});
+window.addEventListener("pagehide", suspendAudio);
+document.addEventListener("visibilitychange", () => {if (document.hidden) suspendAudio();});
+audioContext.addEventListener("statechange", () => {if (audioContext.state == "interrupted") suspendAudio();});
 canvas.addEventListener("pointerdown", handlePointerDown);
 canvas.addEventListener("pointermove", handlePointerMove);
 canvas.addEventListener("pointerup", handlePointerUp);
